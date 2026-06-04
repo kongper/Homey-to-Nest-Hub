@@ -1,15 +1,23 @@
-# Homey Dashboard
+# Homey → Nest Hub Dashboard
 
-A small web page for your local network that shows live capability values for a hand-picked
-set of devices on your Athom Homey Pro. It talks to Homey's **local API** with a Personal
-Access Token, runs as a **Docker container**, and you choose exactly which devices and
-capabilities appear via a `config.json` file.
+A small, self-hosted web page for your local network that shows live capability values for a
+hand-picked set of devices on your Athom Homey Pro. It's designed to sit fullscreen on a
+**wall-mounted tablet or a Google Nest Hub**, but works in any browser. It talks to Homey's
+**local API** with a Personal Access Token, runs as a **Docker container**, and you choose
+exactly which devices and capabilities appear via a `config.json` file.
+
+<!-- Add a screenshot here: drop an image at docs/screenshot.png and it will show below. -->
+![Dashboard screenshot](docs/screenshot.png)
 
 ```
 Browser (LAN)  ──>  Node/Express container  ──>  Homey local API (http://<homey-ip>)
                     · serves the dashboard       (token kept server-side, never in the browser)
                     · proxies + caches requests
 ```
+
+Highlights: colourful glassmorphism UI with an animated background and live clock, YR weather
+icons, configurable card sizes, conditional visibility rules (`showIf`), a "show hidden"
+toggle, and a discovery page to find device/capability IDs. Norwegian labels out of the box.
 
 ## What you need
 
@@ -93,9 +101,23 @@ Apply changes with:
 docker compose restart
 ```
 
-The dashboard at `http://<host-ip>:8080/` auto-refreshes every 5 seconds. Booleans render as
-On/Off (or Alarm/Clear for `alarm_*` capabilities); numbers show with their units; a status dot
-shows online / unavailable / alarm.
+The dashboard at `http://<host-ip>:8080/` auto-refreshes every 5 seconds (in place, no flicker).
+Booleans render as **Ja/Nei** (or Alarm/Clear for `alarm_*` capabilities); numbers show with
+their units and a colour scale for temperatures; a status dot shows online / unavailable / alarm.
+The header has a live clock, a **Vis skjulte** ("show hidden") toggle that reveals cards normally
+hidden by their `showIf` rule, and an **Alle enheter** link to the discovery page.
+
+### Config reference
+
+| Property        | Type    | Purpose                                                                                  |
+| --------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `deviceId`      | string  | Homey device id (copy from the discovery page). **Required.**                            |
+| `label`         | string  | Card title. Defaults to the device name.                                                 |
+| `capabilities`  | array   | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
+| `size`          | string  | `big`, `small`, `list`, or `weather`. Default `small`.                                   |
+| `showIf`        | string  | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`.   |
+
+Top-level keys: `title` (browser tab / document title) and `entities` (the array above).
 
 ## Weather icons (YR)
 
@@ -133,9 +155,21 @@ HOMEY_ADDRESS=http://192.168.1.50 HOMEY_TOKEN=xxx node server.js
 | --------------- | ------------------------------------------------------------- |
 | `/`             | The dashboard (configured devices).                           |
 | `/discover.html`| Lists all devices/capabilities with IDs for setup.            |
-| `/api/state`    | JSON: only the configured entities + current values.          |
+| `/api/state`    | JSON: only the configured entities + current values. Add `?showHidden=1` to also return `showIf`-hidden cards (flagged `hidden: true`). |
 | `/api/discover` | JSON: all devices + all capabilities.                         |
-| `/api/health`   | `{ "ok": true }` health check.                                |
+| `/api/health`   | `{ "ok": true }` health check (used by the Docker healthcheck). |
+
+## Security
+
+This dashboard has **no authentication** and is meant for a trusted home LAN only:
+
+- Anyone who can reach `http://<host-ip>:8080/` sees your dashboard, and `/discover.html`
+  (and `/api/discover`) lists **all** your Homey devices and their current values.
+- The Personal Access Token stays server-side (in the container env) and is never exposed to
+  the browser, but the API key should still be created with **read-only** scope (Devices + Zones).
+- Do **not** port-forward this to the public internet. If you need remote access, put it behind
+  a VPN or an authenticating reverse proxy.
+- `.env` and `config.json` are git-ignored so your token and device IDs are never committed.
 
 ## Notes & troubleshooting
 
@@ -144,4 +178,13 @@ HOMEY_ADDRESS=http://192.168.1.50 HOMEY_TOKEN=xxx node server.js
 - **Homey error / cannot connect:** check `HOMEY_ADDRESS` (include `http://`), that the host can
   reach the Homey IP, and that the token has Devices + Zones permissions. Logs: `docker compose logs -f`.
 - **Device not found (red card):** the `deviceId` changed or the device was removed — re-check it on the discovery page.
-- `CACHE_TTL` (seconds) controls how often the server refetches from Homey, to keep load light.
+- **Polling, not realtime:** the server fetches the full device list from Homey on a timer and
+  caches it for `CACHE_TTL` seconds (default 5). All open screens share that cache, so adding
+  more viewers does not add load on Homey. Raise `CACHE_TTL` (e.g. `15`) to query Homey less often.
+
+## License
+
+[MIT](LICENSE) © Per Henning Johansen.
+
+The bundled YR weather icons are © 2015–2017 Yr / met.no and MIT licensed — see
+[`public/icons/weather/LICENSE`](public/icons/weather/LICENSE).

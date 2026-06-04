@@ -1,11 +1,31 @@
 {
   "name": "homey-dashboard",
   "version": "1.0.0",
-  "description": "Local network dashboard showing selected Homey device capabilities/values via the Homey local API.",
+  "description": "Self-hosted LAN dashboard showing selected Athom Homey device capabilities/values via the Homey local API. Designed for a wall tablet or Google Nest Hub.",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "keywords": [
+    "homey",
+    "athom",
+    "smart-home",
+    "home-automation",
+    "dashboard",
+    "nest-hub",
+    "yr",
+    "weather"
+  ],
+  "author": "Per Henning Johansen",
+  "license": "MIT",
+  "homepage": "https://github.com/kongper/Homey-to-Nest-Hub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kongper/Homey-to-Nest-Hub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kongper/Homey-to-Nest-Hub/issues"
   },
   "engines": {
     "node": ">=24"
