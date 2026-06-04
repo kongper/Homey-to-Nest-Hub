@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Homey — Device Discovery</title>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a212b; --card-border: #28323f;
+    --text: #e6edf3; --muted: #8b97a7; --accent: #4c9aff; --alarm: #f87272;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--card-border);
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 1.3rem; }
+  header a { color: var(--accent); text-decoration: none; }
+  main { padding: 1.25rem 1.5rem; }
+  .hint { color: var(--muted); font-size: .9rem; line-height: 1.6; margin-bottom: 1rem; }
+  .hint code { color: var(--accent); }
+  input#filter {
+    width: 100%; max-width: 420px; padding: .6rem .8rem; margin-bottom: 1.25rem;
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 8px; color: var(--text); font-size: .95rem;
+  }
+  .device { background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 12px; padding: 1rem 1.1rem; margin-bottom: .9rem; }
+  .device h3 { margin: 0 0 .15rem; font-size: 1.05rem; }
+  .device .sub { color: var(--muted); font-size: .82rem; margin-bottom: .35rem; }
+  .id-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; flex-wrap: wrap; }
+  .id { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8rem;
+    background: #0d1117; border: 1px solid var(--card-border); border-radius: 6px;
+    padding: .2rem .5rem; color: var(--accent); }
+  button.copy { background: #233040; color: var(--text); border: 1px solid var(--card-border);
+    border-radius: 6px; padding: .25rem .6rem; font-size: .78rem; cursor: pointer; }
+  button.copy:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--card-border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.cap-id { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--accent); }
+  td.val { font-variant-numeric: tabular-nums; }
+  .error { color: var(--alarm); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Device Discovery</h1>
+    <a href="index.html">← Back to dashboard</a>
+  </header>
+  <main>
+    <div class="hint">
+      Every device Homey reports is listed below with its <code>deviceId</code> and the exact
+      capability names. Copy the ones you want into <code>config.json</code> under
+      <code>entities</code>, then restart the container.
+    </div>
+    <input id="filter" type="search" placeholder="Filter by device, zone, or capability…" />
+    <div id="list">Loading…</div>
+  </main>
+
+<script>
+let allDevices = [];
+
+function copy(text, btn) {
+  navigator.clipboard?.writeText(text).then(() => {
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => (btn.textContent = old), 1200);
+  });
+}
+
+function fmt(v) {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  return String(v);
+}
+
+function render(devices) {
+  if (!devices.length) { document.getElementById('list').textContent = 'No devices match.'; return; }
+  document.getElementById('list').innerHTML = devices.map(d => {
+    const caps = Object.values(d.capabilities);
+    const rows = caps.length ? caps.map(c => `
+      <tr>
+        <td class="cap-id">${c.id}</td>
+        <td>${c.title}</td>
+        <td class="val">${fmt(c.value)}${c.units ? ' ' + c.units : ''}</td>
+      </tr>`).join('') : '<tr><td colspan="3">No capabilities</td></tr>';
+    return `<div class="device">
+      <h3>${d.name}</h3>
+      <div class="sub">${d.zoneName} · class: ${d.class || '—'} ${d.available === false ? '· <span class="error">unavailable</span>' : ''}</div>
+      <div class="id-row">
+        <span class="id">${d.id}</span>
+        <button class="copy" data-id="${d.id}">Copy ID</button>
+      </div>
+      <table>
+        <thead><tr><th>capability</th><th>title</th><th>value</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  document.querySelectorAll('button.copy').forEach(b =>
+    b.addEventListener('click', () => copy(b.dataset.id, b)));
+}
+
+function applyFilter() {
+  const q = document.getElementById('filter').value.toLowerCase().trim();
+  if (!q) return render(allDevices);
+  const filtered = allDevices.filter(d => {
+    const hay = [d.name, d.zoneName, d.class, d.id,
+      ...Object.keys(d.capabilities),
+      ...Object.values(d.capabilities).map(c => c.title)].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  render(filtered);
+}
+
+async function load() {
+  try {
+    const res = await fetch('api/discover', { cache: 'no-store' });
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById('list').innerHTML = `<span class="error">Homey error: ${data.error}</span>`;
+      return;
+    }
+    allDevices = data.devices || [];
+    render(allDevices);
+  } catch (err) {
+    document.getElementById('list').innerHTML = '<span class="error">Cannot reach server.</span>';
+  }
+}
+
+document.getElementById('filter').addEventListener('input', applyFilter);
+load();
+</script>
+</body>
+</html>

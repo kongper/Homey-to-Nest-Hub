@@ -1,0 +1,17 @@
+services:
+  homey-dashboard:
+    build: .
+    image: homey-dashboard:latest
+    container_name: homey-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:3000"        # browse to http://<host-ip>:8080 on your LAN
+    environment:
+      HOMEY_ADDRESS: ${HOMEY_ADDRESS}
+      HOMEY_TOKEN: ${HOMEY_TOKEN}
+      PORT: 3000
+      CACHE_TTL: ${CACHE_TTL:-5}
+      CONFIG_PATH: /app/config.json
+    volumes:
+      # Edit config.json on the host; changes apply on container restart.
+      - ./config.json:/app/config.json:ro

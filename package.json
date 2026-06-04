@@ -1,0 +1,17 @@
+{
+  "name": "homey-dashboard",
+  "version": "1.0.0",
+  "description": "Local network dashboard showing selected Homey device capabilities/values via the Homey local API.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "homey-api": "^3.19.1"
+  }
+}

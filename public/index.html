@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Home</title>
+<style>
+  :root {
+    --bg0: #0b1020;
+    --bg1: #0e1530;
+    --text: #eef2ff;
+    --muted: #97a3c4;
+    --card-border: rgba(255,255,255,.08);
+    --accent: #6aa3ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    font-size: 18px;
+    background: var(--bg0);
+    position: relative;
+    overflow-x: hidden;
+  }
+  /* Animated colour-mesh background */
+  .mesh { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: var(--bg0); }
+  .blob { position: absolute; width: 55vw; height: 55vw; border-radius: 50%;
+    filter: blur(90px); opacity: .55; mix-blend-mode: screen; animation: drift 26s ease-in-out infinite; }
+  .blob.b1 { background: #3b5bff; top: -12vw; left: -8vw; }
+  .blob.b2 { background: #c44bff; bottom: -16vw; right: -6vw; animation-duration: 32s; }
+  .blob.b3 { background: #00c2a8; top: 30vh; right: 18vw; animation-duration: 38s; opacity: .4; }
+  @keyframes drift {
+    0%,100% { transform: translate(0,0) scale(1); }
+    33%     { transform: translate(6vw, 4vh) scale(1.12); }
+    66%     { transform: translate(-5vw, -3vh) scale(.94); }
+  }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: .55rem 1.4rem;
+    backdrop-filter: blur(10px);
+    background: linear-gradient(180deg, rgba(12,18,40,.6), rgba(12,18,40,.15));
+    border-bottom: 1px solid var(--card-border);
+  }
+  .clock { display: flex; align-items: baseline; gap: .6rem; }
+  .clock .time { font-size: 1.5rem; font-weight: 700; letter-spacing: .02em; }
+  .clock .date { color: var(--muted); font-size: .9rem; }
+  .meta { color: var(--muted); font-size: .85rem; display: flex; align-items: center; gap: .7rem; }
+  .meta a { color: var(--accent); text-decoration: none; }
+  .meta a:hover { text-decoration: underline; }
+  .toggle {
+    font-family: inherit; font-size: .82rem; cursor: pointer;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--card-border); border-radius: 999px; padding: .22rem .8rem;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  .toggle:hover { color: var(--text); }
+  .toggle.active {
+    color: #fff; border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+
+  main { padding: 1.1rem 1.4rem 2rem; }
+  .grid { display: grid; gap: 1.1rem; grid-template-columns: repeat(4, 1fr); }
+  .grid.lists { grid-template-columns: repeat(2, 1fr); margin-top: 1.2rem; }
+
+  .card {
+    position: relative; border-radius: 20px; padding: 1rem 1.2rem;
+    background: linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.025));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+    animation: rise .5s cubic-bezier(.2,.7,.2,1) both;
+    transition: transform .25s ease, box-shadow .25s ease;
+  }
+  .card::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 55%, transparent), transparent 60%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+  }
+  .card::after {
+    content: ""; position: absolute; top: -40%; right: -20%; width: 60%; height: 120%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 38%, transparent), transparent);
+    opacity: .5; pointer-events: none;
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 16px 40px rgba(0,0,0,.45); }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  .card.big { grid-column: span 2; }
+  .card.small { grid-column: span 1; }
+  .card.weather { grid-column: span 2; }
+  .grid.lists .card { grid-column: span 1; }
+  .card.unavailable { opacity: .5; filter: grayscale(.5); }
+  .card.missing { --accent: #ff6b6b; }
+  /* Hidden-by-showIf cards, revealed via the toggle */
+  .card.ghost { opacity: .55; border-style: dashed; }
+  .card.ghost .tag {
+    margin-left: .4rem; font-size: .62em; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
+    border: 1px solid var(--card-border); border-radius: 6px; padding: .05em .4em;
+  }
+
+  .head { display: flex; align-items: center; gap: .55rem; position: relative; z-index: 1; }
+  .title { font-weight: 650; font-size: 1.15rem; letter-spacing: .01em; }
+  .card.big .title, .card.weather .title { font-size: 1.35rem; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: #5a6678; flex: none;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+  .dot.ok { background: #36d399; box-shadow: 0 0 10px 1px rgba(54,211,153,.7); }
+  .dot.bad { background: #ff6b6b; box-shadow: 0 0 10px 1px rgba(255,107,114,.7); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+  /* centered titles for big / small / weather */
+  .card.big .head, .card.small .head, .card.weather .head { justify-content: center; text-align: center; }
+
+  .value { font-variant-numeric: tabular-nums; font-weight: 750; }
+  .unit { color: var(--muted); font-weight: 500; font-size: .55em; margin-left: .15em; }
+
+  /* Single (big/small) */
+  .single { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
+    margin-top: .4rem; }
+  .card.small .single { min-height: 46px; }
+  .card.small .single .value { font-size: 2.4rem; }
+  .card.big .single { min-height: 96px; }
+  .card.big .single .value { font-size: 4.6rem; line-height: 1; }
+  .single .wx { width: 56px; height: 56px; }
+  .card.big .single .wx { width: 92px; height: 92px; }
+
+  /* Weather: title on top, temp + symbol on one centered line */
+  .wline { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
+    gap: 1.1rem; margin-top: .3rem; min-height: 92px; }
+  .wline .value { font-size: 4.4rem; line-height: 1; }
+  .wline .wx { width: 92px; height: 92px; }
+
+  /* List: title, dot, value(s) on one line */
+  .lrow { display: flex; align-items: center; gap: .6rem; position: relative; z-index: 1; }
+  .lrow .vals { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+  .lrow .value { font-size: 1.5rem; }
+  .lrow .wx { width: 34px; height: 34px; }
+
+  .wx { display: inline-block; vertical-align: middle; filter: drop-shadow(0 3px 6px rgba(0,0,0,.4)); }
+  .pill { padding: .2rem .8rem; border-radius: 999px; font-size: .85em; font-weight: 700;
+    display: inline-block; }
+  .single .pill { font-size: 1.6rem; padding: .4rem 1.2rem; }
+  .pill.on  { background: rgba(54,211,153,.18);  color: #4ade9e; box-shadow: inset 0 0 0 1px rgba(54,211,153,.4); }
+  .pill.off { background: rgba(120,132,156,.18); color: #aab4cc; box-shadow: inset 0 0 0 1px rgba(120,132,156,.35); }
+  .pill.alarm { background: rgba(255,107,114,.18); color: #ff8a90; box-shadow: inset 0 0 0 1px rgba(255,107,114,.45); }
+
+  .muted { color: var(--muted); font-size: .9rem; }
+  .error { color: #ff8a90; }
+  .notice { border-radius: 18px; padding: 1.4rem 1.6rem; line-height: 1.6; color: var(--muted);
+    background: rgba(255,255,255,.05); border: 1px solid var(--card-border); }
+  .notice code { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="mesh"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+  <header>
+    <div class="clock"><span class="time" id="clock">--:--</span><span class="date" id="date"></span></div>
+    <div class="meta">
+      <span id="status">Loading…</span>
+      <button id="toggleHidden" class="toggle" type="button">Vis skjulte</button>
+      <a href="discover.html">Alle enheter</a>
+    </div>
+  </header>
+  <main id="main"></main>
+
+<script src="weather-symbols.js"></script>
+<script>
+const REFRESH_MS = 5000;
+const main = document.getElementById('main');
+const statusEl = document.getElementById('status');
+const toggleBtn = document.getElementById('toggleHidden');
+
+// Reveal cards normally hidden by their showIf rule (disregards showIf).
+let showHidden = localStorage.getItem('showHidden') === '1';
+function syncToggle() {
+  toggleBtn.classList.toggle('active', showHidden);
+  toggleBtn.textContent = showHidden ? 'Skjul skjulte' : 'Vis skjulte';
+}
+toggleBtn.addEventListener('click', () => {
+  showHidden = !showHidden;
+  localStorage.setItem('showHidden', showHidden ? '1' : '0');
+  syncToggle();
+  lastSig = null;   // force a rebuild
+  tick();
+});
+syncToggle();
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---- Clock ---------------------------------------------------------------
+function updateClock() {
+  const d = new Date();
+  document.getElementById('clock').textContent =
+    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  document.getElementById('date').textContent =
+    d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+// ---- Colours -------------------------------------------------------------
+function accentFor(id) {
+  if (!id) return '#6aa3ff';
+  if (id.startsWith('alarm_')) return '#ff6b6b';
+  if (id === 'onoff') return '#36d399';
+  if (id.startsWith('measure_humidity')) return '#4cc9f0';
+  if (id.includes('power') || id.includes('measure_current') || id.includes('voltage')) return '#b56bff';
+  if (id.startsWith('measure_co2')) return '#2ec4b6';
+  if (id.startsWith('measure_luminance')) return '#ffd166';
+  if (id.startsWith('measure_temperature') || id === 'target_temperature') return '#ff9f43';
+  if (id === 'weather_description') return '#5eb3ff';
+  return '#6aa3ff';
+}
+function tempColor(v) {
+  if (v <= 0) return '#5eb3ff';
+  if (v <= 10) return '#36d3c0';
+  if (v <= 18) return '#48d39a';
+  if (v <= 24) return '#ffd166';
+  if (v <= 29) return '#ff9f43';
+  return '#ff6b6b';
+}
+function valueColor(cap) {
+  if ((cap.id.startsWith('measure_temperature') || cap.id === 'target_temperature')
+      && typeof cap.value === 'number') return tempColor(cap.value);
+  return accentFor(cap.id);
+}
+
+// ---- Weather icon (reuse window.WX from weather-symbols.js) ---------------
+function isDaytime() { const h = new Date().getHours(); return h >= 6 && h < 21; }
+function weatherIcon(rawValue) {
+  if (rawValue === null || rawValue === undefined || !window.WX) return null;
+  let v = String(rawValue).trim().toLowerCase();
+  if (!v) return null;
+  let dn = null;
+  const m = v.match(/_(day|night|polartwilight)$/);
+  if (m) { dn = m[1]; v = v.replace(/_(day|night|polartwilight)$/, ''); }
+  const descKey = v.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const codeKey = v.replace(/[\s._]+/g, '');
+  const base = window.WX.map[descKey] || window.WX.map[codeKey];
+  if (!base) return null;
+  let file = base;
+  if (window.WX.variants.includes(base)) {
+    const day = dn ? dn !== 'night' : isDaytime();
+    file = base + (day ? 'd' : 'n');
+  }
+  return { file, label: rawValue };
+}
+
+function fmtValue(cap, cls) {
+  const v = cap.value;
+  if (cap.id === 'weather_description') {
+    const icon = weatherIcon(v);
+    if (icon) {
+      const lbl = escapeHtml(icon.label);
+      return `<img class="wx ${cls || ''}" src="icons/weather/${icon.file}.svg" alt="${lbl}" title="${lbl}">`;
+    }
+  }
+  if (v === null || v === undefined) return `<span class="value" style="color:var(--muted)">—</span>`;
+  if (typeof v === 'boolean') {
+    const isAlarm = cap.id.startsWith('alarm_');
+    if (isAlarm) return v ? '<span class="pill alarm">Alarm</span>' : '<span class="pill off">Clear</span>';
+    return v ? '<span class="pill on">Ja</span>' : '<span class="pill off">Nei</span>';
+  }
+  if (typeof v === 'number') {
+    const num = Number.isInteger(v) ? v : v.toFixed(1);
+    const unit = cap.units ? `<span class="unit">${escapeHtml(cap.units)}</span>` : '';
+    return `<span class="value" style="color:${valueColor(cap)}">${num}${unit}</span>`;
+  }
+  return `<span class="value" style="color:${valueColor(cap)}">${escapeHtml(String(v))}</span>`;
+}
+
+function dot(ent) {
+  if (ent.missing || ent.available === false) return '<span class="dot bad" title="Unavailable"></span>';
+  if (ent.capabilities.some(c => c.id.startsWith('alarm_') && c.value === true))
+    return '<span class="dot bad" title="Alarm"></span>';
+  return '<span class="dot ok" title="Online"></span>';
+}
+
+function cardAccent(ent) {
+  if (ent.missing) return '#ff6b6b';
+  const alarm = ent.capabilities.find(c => c.id.startsWith('alarm_'));
+  return accentFor((alarm || ent.capabilities[0] || {}).id);
+}
+
+function cardClass(ent) {
+  const size = ['big', 'small', 'list', 'weather'].includes(ent.size) ? ent.size : 'small';
+  const unavail = ent.available === false ? ' unavailable' : '';
+  const ghost = ent.hidden ? ' ghost' : '';
+  let base;
+  if (ent.missing) base = 'card small missing';
+  else if ((size === 'big' || size === 'small') && ent.capabilities.length === 1) base = 'card single-card ' + size + unavail;
+  else if (size === 'weather') base = 'card weather' + unavail;
+  else if (size === 'list') base = 'card list' + unavail;
+  else base = 'card ' + size + unavail;
+  return base + ghost;
+}
+
+// A small "hidden" tag for revealed cards.
+function hiddenTag(ent) { return ent.hidden ? '<span class="tag">hidden</span>' : ''; }
+
+// Inner markup of a card (without the outer .card element), so we can update
+// contents in place without re-triggering the card entry animation.
+function renderInner(ent) {
+  const size = ['big', 'small', 'list', 'weather'].includes(ent.size) ? ent.size : 'small';
+  const title = escapeHtml(ent.label);
+
+  if (ent.missing) {
+    return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
+      <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
+  }
+  if ((size === 'big' || size === 'small') && ent.capabilities.length === 1) {
+    return `<div class="head"><span class="title">${title}${hiddenTag(ent)}</span>${dot(ent)}</div>
+      <div class="single">${fmtValue(ent.capabilities[0])}</div>`;
+  }
+  if (size === 'weather') {
+    const vals = ent.capabilities.map(c => fmtValue(c)).join('');
+    return `<div class="head"><span class="title">${title}${hiddenTag(ent)}</span></div>
+      <div class="wline">${vals}</div>`;
+  }
+  if (size === 'list') {
+    const vals = ent.capabilities.length
+      ? ent.capabilities.map(c => fmtValue(c)).join('')
+      : '<span class="muted">No matching capabilities</span>';
+    return `<div class="lrow"><span class="title">${title}${hiddenTag(ent)}</span>${dot(ent)}<span class="vals">${vals}</span></div>`;
+  }
+  const vals = ent.capabilities.map(c =>
+    `<div class="lrow"><span class="muted">${escapeHtml(c.title)}</span><span class="vals">${fmtValue(c)}</span></div>`
+  ).join('');
+  return `<div class="head"><span class="title">${title}${hiddenTag(ent)}</span>${dot(ent)}</div>
+    <div style="margin-top:.5rem;display:flex;flex-direction:column;gap:.45rem">${vals}</div>`;
+}
+
+let lastSig = null;       // layout signature: triggers a full rebuild when it changes
+const lastInner = {};     // cached inner HTML per card index, to skip no-op updates
+
+async function tick() {
+  try {
+    const url = 'api/state' + (showHidden ? '?showHidden=1' : '');
+    const res = await fetch(url, { cache: 'no-store' });
+    const data = await res.json();
+    if (data.error) { statusEl.innerHTML = `<span class="error">Homey error: ${escapeHtml(data.error)}</span>`; return; }
+    if (!data.configured) {
+      main.innerHTML = `<div class="notice"><strong>No dashboard configured yet.</strong><br>
+        Create a <code>config.json</code> and list devices. Open
+        <a href="discover.html">device discovery</a> to find IDs.</div>`;
+      statusEl.textContent = 'Not configured';
+      lastSig = null;
+      return;
+    }
+    document.title = data.title || 'Home';
+
+    const singles = data.entities.filter(e => e.size !== 'list');
+    const lists = data.entities.filter(e => e.size === 'list');
+    const ordered = [...singles, ...lists];
+    ordered.forEach((e, i) => { e._idx = i; });
+
+    const sig = ordered.map(e =>
+      e.deviceId + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') + '|' +
+      (e.capabilities || []).map(c => c.id).join(',')).join('||');
+
+    if (sig !== lastSig) {
+      // Structure changed (cards added/removed/reordered): full rebuild (animates once).
+      const shell = (e) => {
+        const inner = renderInner(e);
+        lastInner[e._idx] = inner;
+        return `<div class="${cardClass(e)}" id="card-${e._idx}" style="--accent:${cardAccent(e)}">${inner}</div>`;
+      };
+      let html = '';
+      if (singles.length) html += `<div class="grid">${singles.map(shell).join('')}</div>`;
+      if (lists.length) html += `<div class="grid lists">${lists.map(shell).join('')}</div>`;
+      main.innerHTML = html;
+      lastSig = sig;
+    } else {
+      // Same cards: update contents in place, only when actually changed (no blink).
+      for (const e of ordered) {
+        const el = document.getElementById('card-' + e._idx);
+        if (!el) continue;
+        const cls = cardClass(e);
+        if (el.className !== cls) el.className = cls;
+        el.style.setProperty('--accent', cardAccent(e));
+        const inner = renderInner(e);
+        if (lastInner[e._idx] !== inner) { el.innerHTML = inner; lastInner[e._idx] = inner; }
+      }
+    }
+    statusEl.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
+  } catch (err) {
+    statusEl.innerHTML = '<span class="error">Cannot reach server</span>';
+  }
+}
+
+updateClock();
+setInterval(updateClock, 1000);   // live ticking clock (incl. seconds)
+tick();
+setInterval(tick, REFRESH_MS);
+</script>
+</body>
+</html>
