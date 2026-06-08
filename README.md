@@ -47,36 +47,43 @@ Homey device with its `deviceId`, capability names (e.g. `measure_temperature`, 
 
 ## Choosing what to display
 
-Edit `config.json` (start from `config.example.json`):
+Edit `config.json` (start from `config.example.json`). Entities are grouped **by size** —
+`entities` is an object keyed by size, and each size holds an array of cards:
 
 ```json
 {
   "title": "Home Dashboard",
-  "entities": [
-    {
-      "deviceId": "0c5...id-from-discover-page",
-      "label": "Living room sensor",
-      "capabilities": ["measure_temperature", "measure_humidity"]
-    },
-    {
-      "deviceId": "9af...another-id",
-      "label": "Front door",
-      "capabilities": ["alarm_contact"]
-    },
-    {
-      "deviceId": "1bd...dishwasher-id",
-      "label": "Oppvask",
-      "capabilities": ["remaining_time"],
-      "showIf": "!=empty"
-    }
-  ]
+  "entities": {
+    "weather": [
+      {
+        "deviceId": "yr-device-id",
+        "label": "Vær ute",
+        "capabilities": ["measure_temperature", "weather_description"]
+      }
+    ],
+    "small": [
+      {
+        "deviceId": "9af...door-id",
+        "label": "Front door",
+        "capabilities": ["alarm_contact"]
+      }
+    ],
+    "list": [
+      {
+        "deviceId": "1bd...dishwasher-id",
+        "label": "Oppvask",
+        "capabilities": ["remaining_time"],
+        "showIf": "!=empty"
+      }
+    ]
+  }
 }
 ```
 
+- the **size** key (`big`, `small`, `list`, `weather`) groups the cards — see box levels below.
 - `deviceId` — copy from the discovery page.
 - `label` — what to show as the card title (optional; defaults to the device name).
 - `capabilities` — the capability IDs to display. Omit or leave empty to show **all** of a device's capabilities.
-- `size` — `"big"`, `"small"`, `"list"`, or `"weather"` (default `"small"`). Controls how the card is laid out; see box levels below.
 - `showIf` — optional condition; the card is shown only while it holds. Forms:
     - Numeric: `"<20"`, `"<=20"`, `">80"`, `">=80"`, `"==0"`, `"!=0"`.
     - Boolean: `"==true"`, `"==false"`, `"!=true"`, `"!=false"`.
@@ -86,12 +93,12 @@ Edit `config.json` (start from `config.example.json`):
 
 ### Box levels
 
-The `size` property chooses one of three levels:
+The size group a device sits under chooses one of four levels:
 
-- **Big** (`"size": "big"`) — extra-large centered value, **2 per row**.
-- **Small** (`"size": "small"`, the default) — centered value, **4 per row**.
-- **List** (`"size": "list"`) — title, status dot and the value(s) all on **one line**, no labels. List cards are gathered into a section **below** all the other cards, 2 per row.
-- **Weather** (`"size": "weather"`) — title on top, then the value(s) on one line below with no labels — ideal for a temperature plus a `weather_description` icon (`"capabilities": ["measure_temperature", "weather_description"]`). Spans 2 columns in the top grid.
+- **`big`** — extra-large centered value, **2 per row**.
+- **`small`** (the default if you used an unknown size key) — centered value, **4 per row**.
+- **`list`** — title, status dot and the value(s) all on **one line**, no labels. List cards are gathered into a section **below** all the other cards, 2 per row.
+- **`weather`** — title on top, then the value(s) on one line below with no labels — ideal for a temperature plus a `weather_description` icon (`"capabilities": ["measure_temperature", "weather_description"]`). Spans 2 columns in the top grid.
 
 Big and Small show a single centered value; if you give them more than one capability they fall back to labelled rows. Big, Small and Weather share the top grid and can mix on the same row (a Big or Weather takes the space of two Smalls). Cards appear in the order listed in `config.json` within each section.
 
@@ -109,15 +116,16 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 
 ### Config reference
 
-| Property        | Type    | Purpose                                                                                  |
-| --------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `deviceId`      | string  | Homey device id (copy from the discovery page). **Required.**                            |
-| `label`         | string  | Card title. Defaults to the device name.                                                 |
-| `capabilities`  | array   | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
-| `size`          | string  | `big`, `small`, `list`, or `weather`. Default `small`.                                   |
-| `showIf`        | string  | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`.   |
+| Key / property  | Where        | Purpose                                                                                  |
+| --------------- | ------------ | ---------------------------------------------------------------------------------------- |
+| size            | grouping key | `big`, `small`, `list`, or `weather`. The card's layout/level.                           |
+| `deviceId`      | property     | Homey device id (copy from the discovery page).                                          |
+| `label`         | property     | Card title. Defaults to the device name.                                                 |
+| `capabilities`  | property     | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
+| `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`.   |
 
-Top-level keys: `title` (browser tab / document title) and `entities` (the array above).
+Top-level keys: `title` (browser tab / document title) and `entities` (the size→array object above).
+A flat array of entries (each with its own `deviceId` and `size`) is still accepted for backward compatibility.
 
 ## Weather icons (YR)
 

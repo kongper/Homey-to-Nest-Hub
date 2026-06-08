@@ -157,6 +157,26 @@ function loadConfig() {
   }
 }
 
+// Normalise config.entities into a flat array of entries.
+// Supports:
+//   1. Array (legacy):       [ { deviceId, size, ... }, ... ]
+//   2. Grouped by size:      { <size>: [ { deviceId, ... }, ... ], ... }
+// In the grouped form, the size comes from the key.
+function normalizeEntities(config) {
+  const raw = config && config.entities;
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    const out = [];
+    for (const [size, group] of Object.entries(raw)) {
+      if (Array.isArray(group)) {
+        for (const entry of group) out.push({ ...entry, size });
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
 // ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
@@ -184,7 +204,8 @@ app.get('/api/discover', async (req, res) => {
 // The configured dashboard state: only the selected devices/capabilities.
 app.get('/api/state', async (req, res) => {
   const config = loadConfig();
-  if (!config || !Array.isArray(config.entities) || config.entities.length === 0) {
+  const entries = normalizeEntities(config);
+  if (!entries.length) {
     return res.json({ configured: false, entities: [] });
   }
 
@@ -194,7 +215,7 @@ app.get('/api/state', async (req, res) => {
 
   try {
     const { devices, zones } = await getHomeyData();
-    const entities = config.entities
+    const entities = entries
       .map((entry) => {
         const device = devices[entry.deviceId];
         if (!device) {

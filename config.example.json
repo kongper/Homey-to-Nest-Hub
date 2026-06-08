@@ -1,48 +1,45 @@
 {
   "title": "Home Dashboard",
-  "entities": [
-    {
-      "deviceId": "YR-DEVICE-ID",
-      "label": "Vær ute",
-      "size": "weather",
-      "capabilities": ["measure_temperature", "weather_description"]
-    },
-    {
-      "deviceId": "PASTE-DEVICE-ID-FROM-DISCOVER-PAGE",
-      "label": "Temp ute",
-      "size": "big",
-      "capabilities": ["measure_temperature"]
-    },
-    {
-      "deviceId": "ANOTHER-DEVICE-ID",
-      "label": "Front door",
-      "size": "small",
-      "capabilities": ["alarm_contact"]
-    },
-    {
-      "deviceId": "YET-ANOTHER-DEVICE-ID",
-      "label": "Oppvask",
-      "capabilities": ["remaining_time"],
-      "showIf": "!=empty"
-    },
-    {
-      "deviceId": "MULTI-CAP-DEVICE-ID",
-      "label": "Living room sensor",
-      "size": "list",
-      "capabilities": ["measure_temperature", "measure_humidity", "measure_co2"]
-    },
-    {
-      "deviceId": "SINGLE-CAP-LIST-DEVICE-ID",
-      "label": "Power now",
-      "size": "list",
-      "capabilities": ["measure_power"]
-    },
-    {
-      "deviceId": "BATTERY-DEVICE-ID",
-      "label": "Lavt batteri",
-      "size": "list",
-      "capabilities": ["measure_battery"],
-      "showIf": "<20"
-    }
-  ]
+  "entities": {
+    "weather": [
+      {
+        "deviceId": "YR-DEVICE-ID",
+        "label": "Vær ute",
+        "capabilities": ["measure_temperature", "weather_description"]
+      }
+    ],
+    "big": [
+      {
+        "deviceId": "OUTDOOR-TEMP-DEVICE-ID",
+        "label": "Temp ute",
+        "capabilities": ["measure_temperature"]
+      }
+    ],
+    "small": [
+      {
+        "deviceId": "DOOR-DEVICE-ID",
+        "label": "Front door",
+        "capabilities": ["alarm_contact"]
+      }
+    ],
+    "list": [
+      {
+        "deviceId": "DISHWASHER-DEVICE-ID",
+        "label": "Oppvask",
+        "capabilities": ["remaining_time"],
+        "showIf": "!=empty"
+      },
+      {
+        "deviceId": "MULTI-CAP-DEVICE-ID",
+        "label": "Living room sensor",
+        "capabilities": ["measure_temperature", "measure_humidity", "measure_co2"]
+      },
+      {
+        "deviceId": "BATTERY-DEVICE-ID",
+        "label": "Lavt batteri",
+        "capabilities": ["measure_battery"],
+        "showIf": "<20"
+      }
+    ]
+  }
 }
