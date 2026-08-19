@@ -550,16 +550,23 @@ function paintSlider(el, ent) {
   }
 }
 
+// DOM id for a card. The server's `key` is derived from the entry's position in
+// config.json, so it survives cards appearing and disappearing.
+function cardId(ent) {
+  return 'card-' + String(ent.key).replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+function cardEl(ent) { return document.getElementById(cardId(ent)); }
+
 function paintAllSliders() {
   for (const ent of Object.values(lastSliderEnt)) {
-    const el = document.getElementById('card-' + ent._idx);
+    const el = cardEl(ent);
     if (el) paintSlider(el, ent);
   }
 }
 
 function dot(ent) {
   if (ent.missing || ent.available === false) return '<span class="dot bad" title="Unavailable"></span>';
-  if (ent.capabilities.some(c => c.id.startsWith('alarm_') && c.value === true))
+  if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true))
     return '<span class="dot bad" title="Alarm"></span>';
   return '<span class="dot ok" title="Online"></span>';
 }
@@ -567,8 +574,9 @@ function dot(ent) {
 function cardAccent(ent) {
   if (ent.missing) return '#ff6b6b';
   if (ent.size === 'slider') return accentFor(ent.capability);
-  const alarm = ent.capabilities.find(c => c.id.startsWith('alarm_'));
-  return accentFor((alarm || ent.capabilities[0] || {}).id);
+  const caps = ent.capabilities || [];
+  const alarm = caps.find(c => c.id.startsWith('alarm_'));
+  return accentFor((alarm || caps[0] || {}).id);
 }
 
 function cardClass(ent) {
@@ -578,7 +586,7 @@ function cardClass(ent) {
   let base;
   if (ent.missing && size !== 'slider') base = 'card small missing';
   else if (size === 'slider') base = 'card slider' + unavail + (ent.missing ? ' missing' : '');
-  else if ((size === 'big' || size === 'small') && ent.capabilities.length === 1) base = 'card single-card ' + size + unavail;
+  else if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) base = 'card single-card ' + size + unavail;
   else if (size === 'weather') base = 'card weather' + unavail;
   else if (size === 'list') base = 'card list' + unavail;
   else base = 'card ' + size + unavail;
@@ -599,7 +607,7 @@ function renderInner(ent) {
     return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
       <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
   }
-  if ((size === 'big' || size === 'small') && ent.capabilities.length === 1) {
+  if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) {
     return `<div class="head"><span class="title">${title}${hiddenTag(ent)}</span>${dot(ent)}</div>
       <div class="single">${fmtValue(ent.capabilities[0])}</div>`;
   }
@@ -622,23 +630,37 @@ function renderInner(ent) {
 }
 
 let lastSig = null;       // layout signature: triggers a full rebuild when it changes
-const lastInner = {};     // cached inner HTML per card index, to skip no-op updates
+let lastInner = {};       // cached inner HTML per card key, to skip no-op updates
+
+// tick() is called on a timer, after every commit, and by the "vis skjulte"
+// toggle, so several polls can be in flight at once. Only the newest response is
+// allowed to touch the DOM — otherwise a slow earlier one lands last and puts
+// stale values back on screen.
+let tickSeq = 0;
 
 async function tick() {
   // Never poll mid-drag: a changed layout signature (a showIf card appearing)
   // would rebuild the grid and throw away the card being touched.
   if (dragKey) return;
+  const seq = ++tickSeq;
   try {
     const url = 'api/state' + (showHidden ? '?showHidden=1' : '');
     const res = await fetch(url, { cache: 'no-store' });
     const data = await res.json();
+    if (seq !== tickSeq || dragKey) return;   // superseded, or a drag started
     if (data.error) { statusEl.innerHTML = `<span class="error">Homey error: ${escapeHtml(data.error)}</span>`; return; }
     if (!data.configured) {
-      main.innerHTML = `<div class="notice"><strong>No dashboard configured yet.</strong><br>
-        Create a <code>config.json</code> and list devices. Open
-        <a href="discover.html">device discovery</a> to find IDs.</div>`;
-      statusEl.textContent = 'Not configured';
+      main.innerHTML = data.configError
+        ? `<div class="notice"><strong class="error">config.json could not be read.</strong><br>
+           <code>${escapeHtml(data.configError)}</code><br>
+           Fix the file and this page will pick it up within a few seconds.</div>`
+        : `<div class="notice"><strong>No dashboard configured yet.</strong><br>
+           Create a <code>config.json</code> and list devices. Open
+           <a href="discover.html">device discovery</a> to find IDs.</div>`;
+      statusEl.innerHTML = data.configError
+        ? '<span class="error">Bad config</span>' : 'Not configured';
       lastSig = null;
+      lastInner = {};
       return;
     }
     document.title = data.title || 'Home';
@@ -647,7 +669,6 @@ async function tick() {
     const sliderEnts = data.entities.filter(e => e.size === 'slider');
     const lists = data.entities.filter(e => e.size === 'list');
     const ordered = [...singles, ...sliderEnts, ...lists];
-    ordered.forEach((e, i) => { e._idx = i; });
 
     lastSliderEnt = {};
     for (const e of sliderEnts) lastSliderEnt[e.key] = e;
@@ -655,16 +676,17 @@ async function tick() {
     // Deliberately value-free: the signature must not change as positions move,
     // or a rebuild would rip the card out from under a finger mid-drag.
     const sig = ordered.map(e =>
-      (e.key || e.deviceId) + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') +
+      e.key + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') +
       '|' + (e.size === 'slider' ? `${e.min}-${e.max}-${e.step}` : '') + '|' +
       (e.capabilities || []).map(c => c.id).join(',')).join('||');
 
     if (sig !== lastSig) {
       // Structure changed (cards added/removed/reordered): full rebuild (animates once).
+      lastInner = {};
       const shell = (e) => {
         const inner = renderInner(e);
-        lastInner[e._idx] = inner;
-        return `<div class="${cardClass(e)}" id="card-${e._idx}" style="--accent:${cardAccent(e)}">${inner}</div>`;
+        lastInner[e.key] = inner;
+        return `<div class="${cardClass(e)}" id="${cardId(e)}" style="--accent:${cardAccent(e)}">${inner}</div>`;
       };
       let html = '';
       if (singles.length) html += `<div class="grid">${singles.map(shell).join('')}</div>`;
@@ -676,7 +698,7 @@ async function tick() {
     } else {
       // Same cards: update contents in place, only when actually changed (no blink).
       for (const e of ordered) {
-        const el = document.getElementById('card-' + e._idx);
+        const el = cardEl(e);
         if (!el) continue;
         const cls = cardClass(e);
         if (el.className !== cls) el.className = cls;
@@ -685,7 +707,7 @@ async function tick() {
         // change, so a drag in progress survives the poll.
         if (e.size === 'slider') { paintSlider(el, e); continue; }
         const inner = renderInner(e);
-        if (lastInner[e._idx] !== inner) { el.innerHTML = inner; lastInner[e._idx] = inner; }
+        if (lastInner[e.key] !== inner) { el.innerHTML = inner; lastInner[e.key] = inner; }
       }
     }
     statusEl.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;

@@ -104,11 +104,11 @@ The size group a device sits under chooses one of five levels:
 
 Big and Small show a single centered value; if you give them more than one capability they fall back to labelled rows. Big, Small and Weather share the top grid and can mix on the same row (a Big or Weather takes the space of two Smalls). Cards appear in the order listed in `config.json` within each section.
 
-Apply changes with:
-
-```bash
-docker compose restart
-```
+**No restart needed.** `config.json` is re-read on every request, so saving the file is enough —
+the open dashboards pick it up on their next refresh, within about 5 seconds. If the JSON is
+malformed the page says so and quotes the parser's line number, then recovers by itself once you
+fix it. (If your editor replaces the file rather than writing in place, and the container seems
+stuck on the old config, `docker compose restart` still settles it.)
 
 The dashboard at `http://<host-ip>:8080/` auto-refreshes every 5 seconds (in place, no flicker).
 Booleans render as **Ja/Nei** (or Alarm/Clear for `alarm_*` capabilities); numbers show with

@@ -163,12 +163,28 @@ function summariseDevice(device, zones) {
 // ---------------------------------------------------------------------------
 // Config (which devices/capabilities to display)
 // ---------------------------------------------------------------------------
+// The config is re-read on every request, so edits to config.json take effect on
+// the next poll — no container restart needed.
+//
+// A parse error is reported rather than swallowed: previously a stray comma made
+// the dashboard say "no dashboard configured yet", which sends you looking in
+// entirely the wrong place.
+let lastConfigError = '';
 function loadConfig() {
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return null; // no config yet -> dashboard tells user to set one up
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    if (lastConfigError) console.log(`Config OK again: ${CONFIG_PATH}`);
+    lastConfigError = '';
+    return { config, error: null };
+  } catch (err) {
+    // Missing file = genuinely not set up yet. Anything else is a real problem.
+    const error =
+      err?.code === 'ENOENT' ? null : `${path.basename(CONFIG_PATH)}: ${err?.message || err}`;
+    if (error && error !== lastConfigError) {
+      console.error(`Cannot read config — ${error}`);
+      lastConfigError = error;
+    }
+    return { config: null, error };
   }
 }
 
@@ -190,6 +206,21 @@ function normalizeEntities(config) {
     return out;
   }
   return [];
+}
+
+// summariseDevice walks a device's whole capability list, and several config
+// entries usually point at the same device (one thermometer shown as a big card
+// and again as a battery row). Memoise for the life of one request. Returns null
+// when the device isn't on Homey.
+function deviceSummariser(devices, zones) {
+  const memo = new Map();
+  return (deviceId) => {
+    if (!memo.has(deviceId)) {
+      const device = devices[deviceId];
+      memo.set(deviceId, device ? summariseDevice(device, zones) : null);
+    }
+    return memo.get(deviceId);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,16 +306,15 @@ function sliderCards(config) {
     .map((entry, i) => ({ key: `slider:${i}`, entry, spec: sliderSpec(entry) }));
 }
 
-function buildSliderEntity(card, devices, zones) {
+function buildSliderEntity(card, summarise) {
   const { key, entry, spec } = card;
   const members = spec.members.map((m) => {
-    const device = devices[m.id];
-    if (!device) {
+    const summary = summarise(m.id);
+    if (!summary) {
       return { deviceId: m.id, label: m.name || m.id, name: m.name || m.id,
                missing: true, available: false, position: null, devicePosition: null,
                min: m.min, max: m.max };
     }
-    const summary = summariseDevice(device, zones);
     const cap = summary.capabilities[spec.capability];
     const devicePosition = cap ? rawToPct(cap.value, spec.invert) : null;
     return {
@@ -330,8 +360,6 @@ function buildSliderEntity(card, devices, zones) {
     available: members.some((m) => m.available),
     hidden: false,
     members,
-    // Kept so the generic card code paths (dot, accent) still work.
-    capabilities: [],
   };
 }
 
@@ -362,10 +390,11 @@ app.get('/api/discover', async (req, res) => {
 
 // The configured dashboard state: only the selected devices/capabilities.
 app.get('/api/state', async (req, res) => {
-  const config = loadConfig();
+  const { config, error: configError } = loadConfig();
   const entries = normalizeEntities(config);
   if (!entries.length) {
-    return res.json({ configured: false, entities: [] });
+    // configError distinguishes "config.json is broken" from "no config yet".
+    return res.json({ configured: false, configError, entities: [] });
   }
 
   // When ?showHidden=1, entities that would be hidden by showIf are returned
@@ -374,6 +403,7 @@ app.get('/api/state', async (req, res) => {
 
   try {
     const { devices, zones } = await getHomeyData();
+    const summarise = deviceSummariser(devices, zones);
 
     // Sliders are built separately: they span several devices and are never
     // hidden by showIf (a control that disappears is not a control). Both this
@@ -383,15 +413,20 @@ app.get('/api/state', async (req, res) => {
     let sliderIdx = 0;
 
     const entities = entries
-      .map((entry) => {
+      .map((entry, i) => {
         if (entry.size === 'slider') {
           const card = cards[sliderIdx++];
           if (!card || !card.spec.members.length) return null;
-          return buildSliderEntity(card, devices, zones);
+          return buildSliderEntity(card, summarise);
         }
-        const device = devices[entry.deviceId];
-        if (!device) {
+        // `key` identifies the card across polls. It comes from the entry's
+        // position in config.json, not from its position in the response, so it
+        // stays put when a showIf card appears or disappears.
+        const key = `card:${i}`;
+        const summary = summarise(entry.deviceId);
+        if (!summary) {
           return {
+            key,
             deviceId: entry.deviceId,
             label: entry.label || entry.deviceId,
             missing: true,
@@ -399,7 +434,6 @@ app.get('/api/state', async (req, res) => {
             capabilities: [],
           };
         }
-        const summary = summariseDevice(device, zones);
         const wanted =
           Array.isArray(entry.capabilities) && entry.capabilities.length
             ? entry.capabilities
@@ -414,7 +448,8 @@ app.get('/api/state', async (req, res) => {
         if (hidden && !showHidden) return null;
 
         return {
-          deviceId: device.id,
+          key,
+          deviceId: entry.deviceId,
           label: entry.label || summary.name,
           name: summary.name,
           zoneName: summary.zoneName,
@@ -452,15 +487,19 @@ app.post('/api/set', async (req, res) => {
     return res.status(400).json({ error: 'position must be a number (0-100 % down).' });
   }
 
-  const card = sliderCards(loadConfig()).find((c) => c.key === key);
+  const { config, error: configError } = loadConfig();
+  if (configError) {
+    return res.status(500).json({ error: `Cannot read config — ${configError}` });
+  }
+  const card = sliderCards(config).find((c) => c.key === key);
   if (!card || !card.spec.members.length) {
     return res.status(404).json({ error: `No slider card ${key} in config.` });
   }
   const { spec } = card;
 
   try {
-    const homey = await connect();
-    const { devices } = await getHomeyData();
+    // getHomeyData() connects on its own; take the same client it used.
+    const [{ devices }, homey] = await Promise.all([getHomeyData(), connect()]);
 
     const results = await Promise.all(
       spec.members.map(async (member) => {
