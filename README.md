@@ -126,10 +126,10 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 | `capabilities`  | property     | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
 | `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`. Ignored on sliders. |
 | `deviceIds`     | slider only  | The devices the slider drives. Each item is an id string, or `{ "name": …, "id": …, "min": …, "max": … }`. |
-| `capability`    | slider only  | Capability to write. Default `windowcoverings_set`.                                     |
+| `capability`    | slider only  | Capability to write. Default `windowcoverings_set`; blinds exposed as dimmable devices use `dim`. |
 | `min` / `max`   | slider only  | How far a screen travels, in % down. On a member it applies to that device; on the card it's the default for members that don't say. Default `0` / `100`. |
 | `step`          | slider only  | Snap increment in %, on the slider's own 0–100 scale. Default `5`.                        |
-| `invert`        | slider only  | `true` (default) = 0 % is fully up. Set `false` to use Homey's raw 0–100 % open scale.   |
+| `invert`        | slider only  | Flip the direction if 100 % closes the wrong way. Default `false`. See below.             |
 
 Top-level keys: `title` (browser tab / document title) and `entities` (the size→array object above).
 A flat array of entries (each with its own `deviceId` and `size`) is still accepted for backward compatibility.
@@ -158,12 +158,20 @@ what Homey calls the device. It is used when a member has to be named on screen 
 sør: not setable"), and otherwise Homey's own device name is used.
 
 Here the slider runs 0–100 % and both screens hit their own end stop at 100 %: vest is written
-`windowcoverings_set: 0`, sør `0.03`. At 50 % vest goes to 50 % down and sør to 48.5 % — half of
-its own travel — so the two stay visually level.
+`windowcoverings_set: 1`, sør `0.97`. At 50 % vest goes to 50 % closed and sør to 48.5 % — half
+of its own travel — so the two stay visually level.
 
-**Positions are always "% down": `0` = fully up, `100` = fully down.** Homey's
-`windowcoverings_set` runs the other way (`1` = open), so the server converts — that's what
-`invert` controls, and you normally leave it alone.
+**Positions are always "% down": `0` = fully open, `100` = fully closed** — the same direction
+these screens report `windowcoverings_set` in (`0` = open, `1` = closed), so by default the raw
+value is simply the fraction closed. Homey's *documented* convention is the opposite; if a device
+follows that (or is just wired backwards), put `"invert": true` on its card and the server flips
+it. Check on `/discover.html` which way a device reads before assuming.
+
+**Not every blind uses `windowcoverings_set`.** Some are exposed as dimmable devices and take
+`dim` instead — if a slider reports `No windowcoverings_set capability`, look the device up on
+`/discover.html` and set `"capability": "dim"` on that card. Expect the direction to differ too:
+in this house the zips run `windowcoverings_set` 0 = open, while the `dim` blinds run 1 = open,
+so that card also needs `"invert": true`. Direction is per card, so mixed hardware is fine.
 
 - **One slider, several screens.** List every device under `deviceIds` and the card sets them
   all to the same position in one go. The position shown is the average of the members; when

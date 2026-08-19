@@ -15,15 +15,16 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json
 // Card levels. "slider" is the only writable one.
 const SIZES = ['big', 'small', 'list', 'weather', 'slider'];
 
-// Slider defaults. Positions are always expressed as "% down": 0 = fully up,
-// 100 = fully down. Homey's windowcoverings_set runs the other way (1 = open),
-// hence invert: true by default.
+// Slider defaults. Positions are always expressed as "% down": 0 = fully open,
+// 100 = fully closed, matching how these screens report windowcoverings_set
+// (0 = open .. 1 = closed) — so no inversion by default. Devices that follow
+// Homey's documented 0-is-closed convention need "invert": true on the card.
 const SLIDER_DEFAULTS = {
   capability: 'windowcoverings_set',
   min: 0,
   max: 100,
   step: 5,
-  invert: true,
+  invert: false,
 };
 
 if (!HOMEY_ADDRESS || !HOMEY_TOKEN) {
@@ -197,8 +198,9 @@ function normalizeEntities(config) {
 const clampPct = (n) => Math.min(100, Math.max(0, n));
 const numOr = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 
-// Positions are "% down" (0 = fully up, 100 = fully down); Homey's
-// windowcoverings_set is 0 = closed .. 1 = open, so invert flips the two.
+// Positions are "% down" (0 = fully open, 100 = fully closed). These screens
+// report 0 = open .. 1 = closed, so the raw value is just the fraction closed;
+// `invert` flips it for devices that run the other way.
 function pctToRaw(pct, invert) {
   const p = clampPct(pct) / 100;
   return Math.round((invert ? 1 - p : p) * 100) / 100;
@@ -242,7 +244,7 @@ function sliderSpec(entry) {
         ? entry.capability
         : SLIDER_DEFAULTS.capability,
     step: Math.min(50, Math.max(1, numOr(entry.step, SLIDER_DEFAULTS.step))),
-    invert: entry.invert === false ? false : SLIDER_DEFAULTS.invert,
+    invert: typeof entry.invert === 'boolean' ? entry.invert : SLIDER_DEFAULTS.invert,
     members: sliderMembers(entry).map((m) => {
       const lo = clampPct(numOr(m.rawMin, Math.min(dLo, dHi)));
       const hi = clampPct(numOr(m.rawMax, Math.max(dLo, dHi)));
