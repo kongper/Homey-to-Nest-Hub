@@ -12,6 +12,20 @@ const PORT = Number(process.env.PORT || 3000);
 const CACHE_TTL = Number(process.env.CACHE_TTL || 5) * 1000;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 
+// Card levels. "slider" is the only writable one.
+const SIZES = ['big', 'small', 'list', 'weather', 'slider'];
+
+// Slider defaults. Positions are always expressed as "% down": 0 = fully up,
+// 100 = fully down. Homey's windowcoverings_set runs the other way (1 = open),
+// hence invert: true by default.
+const SLIDER_DEFAULTS = {
+  capability: 'windowcoverings_set',
+  min: 0,
+  max: 100,
+  step: 5,
+  invert: true,
+};
+
 if (!HOMEY_ADDRESS || !HOMEY_TOKEN) {
   console.error('Missing HOMEY_ADDRESS or HOMEY_TOKEN environment variable. See .env.example.');
   process.exit(1);
@@ -178,9 +192,152 @@ function normalizeEntities(config) {
 }
 
 // ---------------------------------------------------------------------------
+// Sliders (the only writable cards)
+// ---------------------------------------------------------------------------
+const clampPct = (n) => Math.min(100, Math.max(0, n));
+const numOr = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+
+// Positions are "% down" (0 = fully up, 100 = fully down); Homey's
+// windowcoverings_set is 0 = closed .. 1 = open, so invert flips the two.
+function pctToRaw(pct, invert) {
+  const p = clampPct(pct) / 100;
+  return Math.round((invert ? 1 - p : p) * 100) / 100;
+}
+function rawToPct(raw, invert) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  const p = clampPct(raw * 100);
+  return Math.round((invert ? 100 - p : p) * 10) / 10;
+}
+
+// The devices a slider drives. Each entry of `deviceIds` is either a plain id
+// string or { id, name, min, max }: `name` is there purely to keep config.json
+// readable, and min/max describe how far *that* screen actually travels.
+function sliderMembers(entry) {
+  const raw = Array.isArray(entry.deviceIds)
+    ? entry.deviceIds
+    : entry.deviceId
+      ? [entry.deviceId]
+      : [];
+  return raw
+    .map((m) => (typeof m === 'string' ? { id: m } : m))
+    .filter((m) => m && typeof m.id === 'string' && m.id)
+    .map((m) => ({
+      id: m.id,
+      name: [m.name, m.label].find((s) => typeof s === 'string' && s.trim()) || null,
+      rawMin: numOr(m.min, null),
+      rawMax: numOr(m.max, null),
+    }));
+}
+
+// The slider is always 0-100 %. Each member's min/max says which slice of the
+// device's own travel that maps onto, so a screen that must not go past 97 %
+// down reaches its own end stop when the slider says 100 %. min/max on the card
+// are just the default for members that don't state their own.
+function sliderSpec(entry) {
+  const dLo = clampPct(numOr(entry.min, SLIDER_DEFAULTS.min));
+  const dHi = clampPct(numOr(entry.max, SLIDER_DEFAULTS.max));
+  return {
+    capability:
+      typeof entry.capability === 'string' && entry.capability
+        ? entry.capability
+        : SLIDER_DEFAULTS.capability,
+    step: Math.min(50, Math.max(1, numOr(entry.step, SLIDER_DEFAULTS.step))),
+    invert: entry.invert === false ? false : SLIDER_DEFAULTS.invert,
+    members: sliderMembers(entry).map((m) => {
+      const lo = clampPct(numOr(m.rawMin, Math.min(dLo, dHi)));
+      const hi = clampPct(numOr(m.rawMax, Math.max(dLo, dHi)));
+      return { id: m.id, name: m.name, min: Math.min(lo, hi), max: Math.max(lo, hi) };
+    }),
+  };
+}
+
+// Slider % -> that device's own % down.
+function toDevicePct(pct, member) {
+  const p = clampPct(pct) / 100;
+  return Math.round((member.min + p * (member.max - member.min)) * 10) / 10;
+}
+// That device's own % down -> slider %.
+function fromDevicePct(devicePct, member) {
+  if (typeof devicePct !== 'number' || !Number.isFinite(devicePct)) return null;
+  const span = member.max - member.min;
+  if (span <= 0) return devicePct >= member.max ? 100 : 0;
+  return Math.round(clampPct(((devicePct - member.min) / span) * 100) * 10) / 10;
+}
+
+// Every slider in the current config, keyed as "slider:<index>". Both /api/state
+// and /api/set derive from this, so a device can only be written if it is listed
+// under a slider card here.
+function sliderCards(config) {
+  return normalizeEntities(config)
+    .filter((e) => e.size === 'slider')
+    .map((entry, i) => ({ key: `slider:${i}`, entry, spec: sliderSpec(entry) }));
+}
+
+function buildSliderEntity(card, devices, zones) {
+  const { key, entry, spec } = card;
+  const members = spec.members.map((m) => {
+    const device = devices[m.id];
+    if (!device) {
+      return { deviceId: m.id, label: m.name || m.id, name: m.name || m.id,
+               missing: true, available: false, position: null, devicePosition: null,
+               min: m.min, max: m.max };
+    }
+    const summary = summariseDevice(device, zones);
+    const cap = summary.capabilities[spec.capability];
+    const devicePosition = cap ? rawToPct(cap.value, spec.invert) : null;
+    return {
+      deviceId: m.id,
+      // `label` is the config's own name for the device (falling back to what
+      // Homey calls it); `name` is always Homey's.
+      label: m.name || summary.name,
+      name: summary.name,
+      zoneName: summary.zoneName,
+      missing: false,
+      available: summary.available !== false,
+      setable: cap ? cap.setable !== false : false,
+      hasCapability: !!cap,
+      // `position` is on the slider's 0-100 scale; `devicePosition` is the
+      // device's own % down, which for a limited screen tops out below 100.
+      position: fromDevicePct(devicePosition, m),
+      devicePosition,
+      raw: cap ? cap.value : null,
+      min: m.min,
+      max: m.max,
+    };
+  });
+
+  const known = members.map((m) => m.position).filter((p) => typeof p === 'number');
+  const position = known.length
+    ? Math.round((known.reduce((a, b) => a + b, 0) / known.length) * 10) / 10
+    : null;
+  const spread = known.length > 1 ? Math.max(...known) - Math.min(...known) : 0;
+
+  return {
+    key,
+    size: 'slider',
+    label: entry.label || members[0]?.label || 'Slider',
+    capability: spec.capability,
+    // The slider is always the full 0-100 %; per-device travel lives on members.
+    min: 0,
+    max: 100,
+    step: spec.step,
+    invert: spec.invert,
+    position,
+    mixed: spread > Math.max(spec.step, 2),
+    missing: members.every((m) => m.missing),
+    available: members.some((m) => m.available),
+    hidden: false,
+    members,
+    // Kept so the generic card code paths (dot, accent) still work.
+    capabilities: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 const app = express();
+app.use(express.json({ limit: '8kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Health check
@@ -215,8 +372,21 @@ app.get('/api/state', async (req, res) => {
 
   try {
     const { devices, zones } = await getHomeyData();
+
+    // Sliders are built separately: they span several devices and are never
+    // hidden by showIf (a control that disappears is not a control). Both this
+    // list and /api/set walk normalizeEntities in the same order, so the nth
+    // slider entry here is the nth card there — that's what "slider:<n>" means.
+    const cards = sliderCards(config);
+    let sliderIdx = 0;
+
     const entities = entries
       .map((entry) => {
+        if (entry.size === 'slider') {
+          const card = cards[sliderIdx++];
+          if (!card || !card.spec.members.length) return null;
+          return buildSliderEntity(card, devices, zones);
+        }
         const device = devices[entry.deviceId];
         if (!device) {
           return {
@@ -250,7 +420,7 @@ app.get('/api/state', async (req, res) => {
           available: summary.available,
           missing: false,
           hidden,
-          size: ['big', 'small', 'list', 'weather'].includes(entry.size) ? entry.size : 'small',
+          size: SIZES.includes(entry.size) ? entry.size : 'small',
           capabilities,
         };
       })
@@ -264,6 +434,81 @@ app.get('/api/state', async (req, res) => {
     });
   } catch (err) {
     res.status(502).json({ error: String(err?.message || err) });
+  }
+});
+
+// The one write endpoint. A device can only be written if it is listed under a
+// slider card in config.json, and only on that card's capability — the request
+// carries a card key, never a device id or capability name.
+app.post('/api/set', async (req, res) => {
+  const { key, position } = req.body || {};
+
+  if (typeof key !== 'string' || !/^slider:\d+$/.test(key)) {
+    return res.status(400).json({ error: 'Bad or missing card key.' });
+  }
+  if (typeof position !== 'number' || !Number.isFinite(position)) {
+    return res.status(400).json({ error: 'position must be a number (0-100 % down).' });
+  }
+
+  const card = sliderCards(loadConfig()).find((c) => c.key === key);
+  if (!card || !card.spec.members.length) {
+    return res.status(404).json({ error: `No slider card ${key} in config.` });
+  }
+  const { spec } = card;
+
+  try {
+    const homey = await connect();
+    const { devices } = await getHomeyData();
+
+    const results = await Promise.all(
+      spec.members.map(async (member) => {
+        const target = Math.round(clampPct(position) * 10) / 10;
+        const devicePct = toDevicePct(target, member);
+        const device = devices[member.id];
+        // Report failures under the name from config.json when there is one —
+        // "Utestue zip sør" is more use on screen than a uuid.
+        const name = member.name || device?.name || member.id;
+        if (!device) return { deviceId: member.id, name, ok: false, error: 'Device not found on Homey.' };
+
+        const cap = (device.capabilitiesObj || {})[spec.capability];
+        if (!cap) {
+          return { deviceId: member.id, name, ok: false, error: `No ${spec.capability} capability.` };
+        }
+        if (cap.setable === false) {
+          return { deviceId: member.id, name, ok: false, error: `${spec.capability} is not setable.` };
+        }
+
+        try {
+          await homey.devices.setCapabilityValue({
+            deviceId: member.id,
+            capabilityId: spec.capability,
+            value: pctToRaw(devicePct, spec.invert),
+          });
+          return { deviceId: member.id, name, ok: true, position: target, devicePosition: devicePct };
+        } catch (err) {
+          return { deviceId: member.id, name, ok: false, error: String(err?.message || err) };
+        }
+      }),
+    );
+
+    // A write makes the cached read stale immediately; drop it so the next poll
+    // shows the screens actually moving instead of the pre-command position.
+    cache = { ts: 0, data: null };
+
+    const ok = results.filter((r) => r.ok);
+    const failed = results.filter((r) => !r.ok);
+    if (!ok.length) {
+      return res.status(502).json({ key, ok: false, error: failed[0]?.error || 'All devices failed.', results });
+    }
+    res.json({
+      key,
+      ok: true,
+      position: Math.round(clampPct(position) * 10) / 10,
+      partial: failed.length > 0,
+      results,
+    });
+  } catch (err) {
+    res.status(502).json({ key, ok: false, error: String(err?.message || err) });
   }
 });
 

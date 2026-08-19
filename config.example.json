@@ -22,6 +22,16 @@
         "capabilities": ["alarm_contact"]
       }
     ],
+    "slider": [
+      {
+        "label": "Utestue zip",
+        "deviceIds": [
+          { "name": "Zip sør",  "id": "ZIP-SCREEN-1-DEVICE-ID", "max": 97 },
+          { "name": "Zip vest", "id": "ZIP-SCREEN-2-DEVICE-ID" }
+        ],
+        "step": 5
+      }
+    ],
     "list": [
       {
         "deviceId": "DISHWASHER-DEVICE-ID",

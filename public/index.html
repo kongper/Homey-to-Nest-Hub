@@ -66,6 +66,7 @@
   main { padding: 1.1rem 1.4rem 2rem; }
   .grid { display: grid; gap: 1.1rem; grid-template-columns: repeat(4, 1fr); }
   .grid.lists { grid-template-columns: repeat(2, 1fr); margin-top: 1.2rem; }
+  .grid.sliders { grid-template-columns: repeat(2, 1fr); margin-top: 1.2rem; }
 
   .card {
     position: relative; border-radius: 20px; padding: 1rem 1.2rem;
@@ -150,6 +151,43 @@
   .pill.off { background: rgba(120,132,156,.18); color: #aab4cc; box-shadow: inset 0 0 0 1px rgba(120,132,156,.35); }
   .pill.alarm { background: rgba(255,107,114,.18); color: #ff8a90; box-shadow: inset 0 0 0 1px rgba(255,107,114,.45); }
 
+  /* ---- Slider (writable) ------------------------------------------------ */
+  .card.slider { grid-column: span 1; padding: .9rem 1.1rem 1rem; }
+  .card.slider .head { justify-content: flex-start; }
+  .card.slider .pos { margin-left: auto; font-variant-numeric: tabular-nums;
+    font-weight: 750; font-size: 1.9rem; line-height: 1; color: var(--accent); }
+  .card.slider .pos .unit { font-size: .5em; }
+  .card.slider .pos.stale { opacity: .6; }
+  .card.slider .live { color: var(--muted); font-size: .8rem; margin-left: .45rem;
+    font-variant-numeric: tabular-nums; }
+
+  /* Custom track: the Nest Hub handles pointer events on a div far better
+     than dragging a native <input type=range>, and tapping the track works. */
+  .track { position: relative; z-index: 2; margin: .85rem 0 .3rem; height: 46px;
+    border-radius: 14px; background: rgba(255,255,255,.09);
+    box-shadow: inset 0 0 0 1px var(--card-border);
+    touch-action: none; cursor: pointer; overflow: hidden; }
+  .track .fill { position: absolute; inset: 0 auto 0 0; width: 0;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent),
+      color-mix(in srgb, var(--accent) 80%, transparent));
+    transition: width .18s ease; }
+  .track.dragging .fill, .track.dragging .knob { transition: none; }
+  .track .knob { position: absolute; top: 50%; left: 0; width: 8px; height: 30px;
+    margin-left: -4px; border-radius: 4px; background: #fff; transform: translateY(-50%);
+    box-shadow: 0 2px 8px rgba(0,0,0,.5); transition: left .18s ease; }
+
+  .srow { display: flex; align-items: center; gap: .45rem; position: relative; z-index: 2; }
+  .sbtn { font-family: inherit; font-size: .95rem; font-weight: 600; cursor: pointer;
+    background: rgba(255,255,255,.07); color: var(--text);
+    border: 1px solid var(--card-border); border-radius: 11px;
+    min-width: 44px; min-height: 40px; padding: 0 .7rem;
+    touch-action: manipulation; transition: background .15s, border-color .15s; }
+  .sbtn:active { background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+  .sbtn.wide { flex: 1; }
+  .sstat { margin-left: auto; font-size: .78rem; color: var(--muted); text-align: right;
+    max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sstat.err { color: #ff8a90; }
+
   .muted { color: var(--muted); font-size: .9rem; }
   .error { color: #ff8a90; }
   .notice { border-radius: 18px; padding: 1.4rem 1.6rem; line-height: 1.6; color: var(--muted);
@@ -172,6 +210,10 @@
 <script src="weather-symbols.js"></script>
 <script>
 const REFRESH_MS = 5000;
+const SIZES = ['big', 'small', 'list', 'weather', 'slider'];
+// How long to keep showing the position we commanded while the screens travel
+// there, before trusting the live reading again.
+const PENDING_MS = 25000;
 const main = document.getElementById('main');
 const statusEl = document.getElementById('status');
 const toggleBtn = document.getElementById('toggleHidden');
@@ -216,6 +258,7 @@ function accentFor(id) {
   if (id.startsWith('measure_luminance')) return '#ffd166';
   if (id.startsWith('measure_temperature') || id === 'target_temperature') return '#ff9f43';
   if (id === 'weather_description') return '#5eb3ff';
+  if (id.startsWith('windowcoverings')) return '#ffb457';
   return '#6aa3ff';
 }
 function tempColor(v) {
@@ -276,6 +319,244 @@ function fmtValue(cap, cls) {
   return `<span class="value" style="color:${valueColor(cap)}">${escapeHtml(String(v))}</span>`;
 }
 
+// ---- Sliders -------------------------------------------------------------
+// Per-card UI state. `shown` is what the thumb sits at, `pending` is a position
+// we have commanded and are waiting for the screens to reach. Neither is ever
+// overwritten by the 5 s poll while the user has a finger down.
+const sliders = {};        // key -> { spec, shown, pending, pendingAt, drag, busy, seq, msg, err }
+let lastSliderEnt = {};    // key -> latest slider entity from /api/state
+
+function sliderState(key) {
+  if (!sliders[key]) {
+    sliders[key] = { spec: null, shown: 0, pending: null, pendingAt: 0,
+                     drag: false, busy: false, seq: 0, msg: '', err: false };
+  }
+  return sliders[key];
+}
+
+// Snap to the step grid, but keep the exact limits reachable: with step 5 and
+// max 97, dragging to the far end must give 97, not 95.
+function snap(v, spec) {
+  if (v <= spec.min) return spec.min;
+  if (v >= spec.max) return spec.max;
+  const stepped = Math.round(v / spec.step) * spec.step;
+  return Math.min(spec.max, Math.max(spec.min, Math.round(stepped * 10) / 10));
+}
+
+function pctFromEvent(track, clientX) {
+  const r = track.getBoundingClientRect();
+  if (!r.width) return 0;
+  return ((clientX - r.left) / r.width) * 100;
+}
+
+// Send the position. A per-card sequence number means a slow response from an
+// earlier drag can never clobber a newer one.
+async function commit(key) {
+  const st = sliderState(key);
+  if (!st.spec) return;
+  const target = st.shown;
+  const seq = ++st.seq;
+  st.pending = target;
+  st.pendingAt = Date.now();
+  st.busy = true;
+  st.err = false;
+  st.msg = 'Sender…';
+  paintAllSliders();
+
+  try {
+    const res = await fetch('api/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, position: target }),
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (seq !== st.seq) return;               // superseded by a newer drag
+    st.busy = false;
+    // A response that lands while a finger is down must not move the thumb —
+    // report the outcome, but leave the position the user is choosing alone.
+    if (!res.ok || data.ok === false) {
+      st.err = true;
+      st.msg = data.error ? String(data.error).slice(0, 90) : `Feil (HTTP ${res.status})`;
+      if (!st.drag) st.pending = null;         // fall back to the live reading
+    } else {
+      if (!st.drag && typeof data.position === 'number') { st.pending = data.position; st.shown = data.position; }
+      const failed = (data.results || []).filter(r => !r.ok);
+      st.err = failed.length > 0;
+      // On success the "på vei" readout below is the feedback, so no message.
+      st.msg = failed.length
+        ? `${failed[0].name || 'Enhet'}: ${failed[0].error}`.slice(0, 90) +
+          (failed.length > 1 ? ` (+${failed.length - 1})` : '')
+        : '';
+    }
+  } catch (err) {
+    if (seq !== st.seq) return;
+    st.busy = false; st.err = true;
+    if (!st.drag) st.pending = null;
+    st.msg = 'Ingen forbindelse';
+  }
+  paintAllSliders();
+  tick();
+}
+
+function nudge(key, delta) {
+  const st = sliderState(key);
+  if (!st.spec) return;
+  st.shown = snap(st.shown + delta, st.spec);
+  commit(key);
+}
+
+// Drag / tap on the track. Listeners live on the document so cards can be
+// rebuilt without rebinding anything.
+let dragKey = null;
+
+function onDown(ev) {
+  const track = ev.target.closest && ev.target.closest('.track[data-key]');
+  if (!track) return;
+  const key = track.dataset.key;
+  const st = sliderState(key);
+  if (!st.spec) return;
+  dragKey = key;
+  st.drag = true;
+  st.shown = snap(pctFromEvent(track, ev.clientX), st.spec);
+  track.classList.add('dragging');
+  if (track.setPointerCapture && ev.pointerId !== undefined) {
+    try { track.setPointerCapture(ev.pointerId); } catch {}
+  }
+  ev.preventDefault();
+  paintAllSliders();
+}
+
+function onMove(ev) {
+  if (!dragKey) return;
+  const st = sliderState(dragKey);
+  const track = document.querySelector(`.track[data-key="${dragKey}"]`);
+  if (!track || !st.spec) return;
+  st.shown = snap(pctFromEvent(track, ev.clientX), st.spec);
+  ev.preventDefault();
+  paintAllSliders();
+}
+
+function onUp() {
+  if (!dragKey) return;
+  const key = dragKey;
+  dragKey = null;
+  const st = sliderState(key);
+  st.drag = false;
+  const track = document.querySelector(`.track[data-key="${key}"]`);
+  if (track) track.classList.remove('dragging');
+  commit(key);                               // one command, on release
+}
+
+if (window.PointerEvent) {
+  document.addEventListener('pointerdown', onDown);
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+} else {
+  // Older cast/webview runtimes without Pointer Events.
+  document.addEventListener('touchstart', (e) => onDown(Object.assign({}, e, {
+    target: e.target, clientX: e.touches[0].clientX, preventDefault: () => e.preventDefault() })));
+  document.addEventListener('touchmove', (e) => onMove({
+    clientX: e.touches[0].clientX, preventDefault: () => e.preventDefault() }));
+  document.addEventListener('touchend', onUp);
+  document.addEventListener('mousedown', onDown);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+main.addEventListener('click', (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.sbtn[data-act]');
+  if (!btn) return;
+  const key = btn.dataset.key;
+  const st = sliderState(key);
+  if (!st.spec) return;
+  const act = btn.dataset.act;
+  if (act === 'up')        { st.shown = st.spec.min; commit(key); }
+  else if (act === 'down') { st.shown = st.spec.max; commit(key); }
+  else if (act === 'minus') nudge(key, -st.spec.step);
+  else if (act === 'plus')  nudge(key, +st.spec.step);
+});
+
+// Static skeleton — values are filled in by paintSlider so the card never gets
+// its innerHTML replaced under a moving finger.
+function renderSlider(ent) {
+  const title = escapeHtml(ent.label);
+  const key = escapeHtml(ent.key);
+  return `<div class="head">
+      <span class="title">${title}</span>
+      <span class="pos">—</span>
+      ${dot(ent)}
+    </div>
+    <div class="track" data-key="${key}">
+      <div class="fill"></div>
+      <div class="knob"></div>
+    </div>
+    <div class="srow">
+      <button class="sbtn wide" type="button" data-act="up"    data-key="${key}">Opp</button>
+      <button class="sbtn"      type="button" data-act="minus" data-key="${key}">&minus;</button>
+      <button class="sbtn"      type="button" data-act="plus"  data-key="${key}">+</button>
+      <button class="sbtn wide" type="button" data-act="down"  data-key="${key}">Ned</button>
+      <span class="sstat"></span>
+    </div>`;
+}
+
+// Reconcile one slider card against the latest server reading.
+function paintSlider(el, ent) {
+  const st = sliderState(ent.key);
+  st.spec = { min: ent.min, max: ent.max, step: ent.step };
+  const live = typeof ent.position === 'number' ? ent.position : null;
+
+  if (!st.drag) {
+    if (st.pending !== null) {
+      const tol = Math.max(st.spec.step, 3);
+      const arrived = live !== null && Math.abs(live - st.pending) <= tol;
+      if (arrived || Date.now() - st.pendingAt > PENDING_MS) {
+        st.pending = null;
+        if (live !== null) st.shown = live;
+      }
+    } else if (live !== null) {
+      st.shown = live;
+    }
+  }
+
+  const shown = snap(st.shown, st.spec);
+  const posEl = el.querySelector('.pos');
+  const fill = el.querySelector('.fill');
+  const knob = el.querySelector('.knob');
+  const stat = el.querySelector('.sstat');
+  if (!posEl || !fill || !knob) return;
+
+  posEl.innerHTML = `${Math.round(shown)}<span class="unit">%</span>`;
+  posEl.classList.toggle('stale', st.pending !== null || st.drag);
+  fill.style.width = shown + '%';
+  knob.style.left = shown + '%';
+
+  if (stat) {
+    let msg = st.msg;
+    if (!st.busy && !st.err) {
+      if (st.pending !== null) msg = live !== null ? `på vei (${Math.round(live)} %)` : 'på vei';
+      else if (ent.mixed) msg = 'ulik posisjon';
+      else msg = '';
+    }
+    const bad = (ent.members || []).filter(m => m.missing || !m.available || m.hasCapability === false);
+    if (!msg && bad.length) {
+      msg = bad.length === 1
+        ? `${bad[0].label || bad[0].name}: utilgjengelig`
+        : `${bad.length} utilgjengelige`;
+    }
+    stat.textContent = msg || '';
+    stat.classList.toggle('err', !!st.err);
+  }
+}
+
+function paintAllSliders() {
+  for (const ent of Object.values(lastSliderEnt)) {
+    const el = document.getElementById('card-' + ent._idx);
+    if (el) paintSlider(el, ent);
+  }
+}
+
 function dot(ent) {
   if (ent.missing || ent.available === false) return '<span class="dot bad" title="Unavailable"></span>';
   if (ent.capabilities.some(c => c.id.startsWith('alarm_') && c.value === true))
@@ -285,16 +566,18 @@ function dot(ent) {
 
 function cardAccent(ent) {
   if (ent.missing) return '#ff6b6b';
+  if (ent.size === 'slider') return accentFor(ent.capability);
   const alarm = ent.capabilities.find(c => c.id.startsWith('alarm_'));
   return accentFor((alarm || ent.capabilities[0] || {}).id);
 }
 
 function cardClass(ent) {
-  const size = ['big', 'small', 'list', 'weather'].includes(ent.size) ? ent.size : 'small';
+  const size = SIZES.includes(ent.size) ? ent.size : 'small';
   const unavail = ent.available === false ? ' unavailable' : '';
   const ghost = ent.hidden ? ' ghost' : '';
   let base;
-  if (ent.missing) base = 'card small missing';
+  if (ent.missing && size !== 'slider') base = 'card small missing';
+  else if (size === 'slider') base = 'card slider' + unavail + (ent.missing ? ' missing' : '');
   else if ((size === 'big' || size === 'small') && ent.capabilities.length === 1) base = 'card single-card ' + size + unavail;
   else if (size === 'weather') base = 'card weather' + unavail;
   else if (size === 'list') base = 'card list' + unavail;
@@ -308,9 +591,10 @@ function hiddenTag(ent) { return ent.hidden ? '<span class="tag">hidden</span>' 
 // Inner markup of a card (without the outer .card element), so we can update
 // contents in place without re-triggering the card entry animation.
 function renderInner(ent) {
-  const size = ['big', 'small', 'list', 'weather'].includes(ent.size) ? ent.size : 'small';
+  const size = SIZES.includes(ent.size) ? ent.size : 'small';
   const title = escapeHtml(ent.label);
 
+  if (size === 'slider') return renderSlider(ent);
   if (ent.missing) {
     return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
       <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
@@ -341,6 +625,9 @@ let lastSig = null;       // layout signature: triggers a full rebuild when it c
 const lastInner = {};     // cached inner HTML per card index, to skip no-op updates
 
 async function tick() {
+  // Never poll mid-drag: a changed layout signature (a showIf card appearing)
+  // would rebuild the grid and throw away the card being touched.
+  if (dragKey) return;
   try {
     const url = 'api/state' + (showHidden ? '?showHidden=1' : '');
     const res = await fetch(url, { cache: 'no-store' });
@@ -356,13 +643,20 @@ async function tick() {
     }
     document.title = data.title || 'Home';
 
-    const singles = data.entities.filter(e => e.size !== 'list');
+    const singles = data.entities.filter(e => e.size !== 'list' && e.size !== 'slider');
+    const sliderEnts = data.entities.filter(e => e.size === 'slider');
     const lists = data.entities.filter(e => e.size === 'list');
-    const ordered = [...singles, ...lists];
+    const ordered = [...singles, ...sliderEnts, ...lists];
     ordered.forEach((e, i) => { e._idx = i; });
 
+    lastSliderEnt = {};
+    for (const e of sliderEnts) lastSliderEnt[e.key] = e;
+
+    // Deliberately value-free: the signature must not change as positions move,
+    // or a rebuild would rip the card out from under a finger mid-drag.
     const sig = ordered.map(e =>
-      e.deviceId + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') + '|' +
+      (e.key || e.deviceId) + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') +
+      '|' + (e.size === 'slider' ? `${e.min}-${e.max}-${e.step}` : '') + '|' +
       (e.capabilities || []).map(c => c.id).join(',')).join('||');
 
     if (sig !== lastSig) {
@@ -374,9 +668,11 @@ async function tick() {
       };
       let html = '';
       if (singles.length) html += `<div class="grid">${singles.map(shell).join('')}</div>`;
+      if (sliderEnts.length) html += `<div class="grid sliders">${sliderEnts.map(shell).join('')}</div>`;
       if (lists.length) html += `<div class="grid lists">${lists.map(shell).join('')}</div>`;
       main.innerHTML = html;
       lastSig = sig;
+      paintAllSliders();
     } else {
       // Same cards: update contents in place, only when actually changed (no blink).
       for (const e of ordered) {
@@ -385,6 +681,9 @@ async function tick() {
         const cls = cardClass(e);
         if (el.className !== cls) el.className = cls;
         el.style.setProperty('--accent', cardAccent(e));
+        // Sliders are never re-rendered: paintSlider nudges the few nodes that
+        // change, so a drag in progress survives the poll.
+        if (e.size === 'slider') { paintSlider(el, e); continue; }
         const inner = renderInner(e);
         if (lastInner[e._idx] !== inner) { el.innerHTML = inner; lastInner[e._idx] = inner; }
       }

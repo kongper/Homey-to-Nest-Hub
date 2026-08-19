@@ -17,7 +17,8 @@ Browser (LAN)  ──>  Node/Express container  ──>  Homey local API (http:/
 
 Highlights: colourful glassmorphism UI with an animated background and live clock, YR weather
 icons, configurable card sizes, conditional visibility rules (`showIf`), a "show hidden"
-toggle, and a discovery page to find device/capability IDs. Norwegian labels out of the box.
+toggle, touch **sliders** for zip screens and blinds, and a discovery page to find
+device/capability IDs. Norwegian labels out of the box.
 
 ## What you need
 
@@ -93,12 +94,13 @@ Edit `config.json` (start from `config.example.json`). Entities are grouped **by
 
 ### Box levels
 
-The size group a device sits under chooses one of four levels:
+The size group a device sits under chooses one of five levels:
 
 - **`big`** — extra-large centered value, **2 per row**.
 - **`small`** (the default if you used an unknown size key) — centered value, **4 per row**.
 - **`list`** — title, status dot and the value(s) all on **one line**, no labels. List cards are gathered into a section **below** all the other cards, 2 per row.
 - **`weather`** — title on top, then the value(s) on one line below with no labels — ideal for a temperature plus a `weather_description` icon (`"capabilities": ["measure_temperature", "weather_description"]`). Spans 2 columns in the top grid.
+- **`slider`** — a **control**, not a readout: drag or tap to set a position on one or more devices at once. See [Sliders](#sliders-zip-screens-blinds) below. 2 per row, in their own section between the top grid and the lists.
 
 Big and Small show a single centered value; if you give them more than one capability they fall back to labelled rows. Big, Small and Weather share the top grid and can mix on the same row (a Big or Weather takes the space of two Smalls). Cards appear in the order listed in `config.json` within each section.
 
@@ -118,14 +120,82 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 
 | Key / property  | Where        | Purpose                                                                                  |
 | --------------- | ------------ | ---------------------------------------------------------------------------------------- |
-| size            | grouping key | `big`, `small`, `list`, or `weather`. The card's layout/level.                           |
+| size            | grouping key | `big`, `small`, `list`, `weather`, or `slider`. The card's layout/level.                 |
 | `deviceId`      | property     | Homey device id (copy from the discovery page).                                          |
 | `label`         | property     | Card title. Defaults to the device name.                                                 |
 | `capabilities`  | property     | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
-| `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`.   |
+| `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`. Ignored on sliders. |
+| `deviceIds`     | slider only  | The devices the slider drives. Each item is an id string, or `{ "name": …, "id": …, "min": …, "max": … }`. |
+| `capability`    | slider only  | Capability to write. Default `windowcoverings_set`.                                     |
+| `min` / `max`   | slider only  | How far a screen travels, in % down. On a member it applies to that device; on the card it's the default for members that don't say. Default `0` / `100`. |
+| `step`          | slider only  | Snap increment in %, on the slider's own 0–100 scale. Default `5`.                        |
+| `invert`        | slider only  | `true` (default) = 0 % is fully up. Set `false` to use Homey's raw 0–100 % open scale.   |
 
 Top-level keys: `title` (browser tab / document title) and `entities` (the size→array object above).
 A flat array of entries (each with its own `deviceId` and `size`) is still accepted for backward compatibility.
+
+## Sliders (zip screens, blinds)
+
+A `slider` card writes back to Homey. Everything else in this dashboard is read-only, so
+this is the one place where the API key needs **write** access.
+
+```json
+"slider": [
+  {
+    "label": "Utestue zip",
+    "deviceIds": [
+      { "name": "Utestue zip sør",  "id": "dcc9a30a-…", "max": 97 },
+      { "name": "Utestue zip vest", "id": "d6dc87b3-…" }
+    ],
+    "step": 5
+  }
+]
+```
+
+Each item of `deviceIds` is either a bare id string or an object. The object form takes a
+**`name`**, which exists only to keep `config.json` readable — nothing depends on it matching
+what Homey calls the device. It is used when a member has to be named on screen ("Utestue zip
+sør: not setable"), and otherwise Homey's own device name is used.
+
+Here the slider runs 0–100 % and both screens hit their own end stop at 100 %: vest is written
+`windowcoverings_set: 0`, sør `0.03`. At 50 % vest goes to 50 % down and sør to 48.5 % — half of
+its own travel — so the two stay visually level.
+
+**Positions are always "% down": `0` = fully up, `100` = fully down.** Homey's
+`windowcoverings_set` runs the other way (`1` = open), so the server converts — that's what
+`invert` controls, and you normally leave it alone.
+
+- **One slider, several screens.** List every device under `deviceIds` and the card sets them
+  all to the same position in one go. The position shown is the average of the members; when
+  they disagree by more than one step the card says *ulik posisjon*.
+- **Travel limits.** `min`/`max` describe how far a screen actually goes. **The slider is always
+  0–100 %**; a member's range is what that maps onto, so a zip whose fabric starts folding past
+  97 % down gets `"max": 97` and reaches *its* end stop when the slider reads 100 %. Nothing on
+  screen shows 97 — the limit is a property of the hardware, not something to aim at. Put the
+  range on the member it applies to; on the card it just becomes the default for members that
+  don't state their own.
+- **Sent on release.** Dragging only moves the thumb; the command goes out once, when you let
+  go. `Opp` / `Ned` jump to the configured limits, `−` / `+` step by `step`.
+- **`showIf` is ignored** on sliders — a control that disappears is not a control.
+- The commanded position stays on screen while the screens travel (the live reading is shown
+  next to it as *på vei (45 %)*), and the poll can never yank the thumb out from under your
+  finger. If a device fails the card says so instead of silently snapping back.
+
+### Requirements
+
+1. **A write-capable API key.** At <https://my.homey.app> → **Settings → API Keys**, the key in
+   `HOMEY_TOKEN` needs **write** on Devices. A read-only key makes the dashboard work exactly
+   as before, but sliders will report an error when you move them.
+2. The devices must expose the capability as **setable** — check on `/discover.html`. The server
+   refuses to write a capability a device doesn't have or can't set, and tells you which one.
+
+### Security
+
+A slider means anyone who can reach the dashboard can move your screens, and there is still no
+authentication (see [Security](#security) above). The write path is deliberately narrow:
+`POST /api/set` takes a **card key**, never a device id or capability name, so only devices you
+listed under a `slider` card can be written, and only on that card's capability. Everything is
+clamped server-side. Keep it on the LAN.
 
 ## Weather icons (YR)
 
@@ -164,6 +234,7 @@ HOMEY_ADDRESS=http://192.168.1.50 HOMEY_TOKEN=xxx node server.js
 | `/`             | The dashboard (configured devices).                           |
 | `/discover.html`| Lists all devices/capabilities with IDs for setup.            |
 | `/api/state`    | JSON: only the configured entities + current values. Add `?showHidden=1` to also return `showIf`-hidden cards (flagged `hidden: true`). |
+| `POST /api/set` | Move a slider. Body `{ "key": "slider:0", "position": 45 }` (position in % down). Only accepts cards defined under `slider` in `config.json`. |
 | `/api/discover` | JSON: all devices + all capabilities.                         |
 | `/api/health`   | `{ "ok": true }` health check (used by the Docker healthcheck). |
 
@@ -173,8 +244,11 @@ This dashboard has **no authentication** and is meant for a trusted home LAN onl
 
 - Anyone who can reach `http://<host-ip>:8080/` sees your dashboard, and `/discover.html`
   (and `/api/discover`) lists **all** your Homey devices and their current values.
+- If you configure any `slider` cards, anyone who can reach the page can also **move those
+  devices**. Nothing else is writable — see [Sliders](#sliders-zip-screens-blinds).
 - The Personal Access Token stays server-side (in the container env) and is never exposed to
-  the browser, but the API key should still be created with **read-only** scope (Devices + Zones).
+  the browser. Use **read-only** scope (Devices + Zones) unless you use sliders, which need
+  write on Devices.
 - Do **not** port-forward this to the public internet. If you need remote access, put it behind
   a VPN or an authenticating reverse proxy.
 - `.env` and `config.json` are git-ignored so your token and device IDs are never committed.
