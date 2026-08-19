@@ -188,6 +188,13 @@
     max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sstat.err { color: #ff8a90; }
 
+  /* Config problem, shown without blanking a wall display that still works */
+  .banner { margin: 1rem 1.4rem -.2rem; padding: .7rem 1rem; border-radius: 12px;
+    font-size: .9rem; line-height: 1.45; color: #ffc9cc;
+    background: rgba(255,107,114,.12); border: 1px solid rgba(255,107,114,.35);
+    border-left: 4px solid #ff6b6b; }
+  .banner[hidden] { display: none; }
+
   .muted { color: var(--muted); font-size: .9rem; }
   .error { color: #ff8a90; }
   .notice { border-radius: 18px; padding: 1.4rem 1.6rem; line-height: 1.6; color: var(--muted);
@@ -205,6 +212,7 @@
       <a href="discover.html">Alle enheter</a>
     </div>
   </header>
+  <div id="cfgwarn" class="banner" hidden></div>
   <main id="main"></main>
 
 <script src="weather-symbols.js"></script>
@@ -217,6 +225,14 @@ const PENDING_MS = 25000;
 const main = document.getElementById('main');
 const statusEl = document.getElementById('status');
 const toggleBtn = document.getElementById('toggleHidden');
+const warnEl = document.getElementById('cfgwarn');
+
+// A config.json problem the dashboard is surviving: the cards below are live
+// readings, but the card *list* is whatever last parsed.
+function setConfigWarning(msg) {
+  warnEl.textContent = msg ? `Viser lagret oppsett — ${msg}` : '';
+  warnEl.hidden = !msg;
+}
 
 // Reveal cards normally hidden by their showIf rule (disregards showIf).
 let showHidden = localStorage.getItem('showHidden') === '1';
@@ -650,6 +666,7 @@ async function tick() {
     if (seq !== tickSeq || dragKey) return;   // superseded, or a drag started
     if (data.error) { statusEl.innerHTML = `<span class="error">Homey error: ${escapeHtml(data.error)}</span>`; return; }
     if (!data.configured) {
+      setConfigWarning(null);   // the full-page notice below covers it
       main.innerHTML = data.configError
         ? `<div class="notice"><strong class="error">config.json could not be read.</strong><br>
            <code>${escapeHtml(data.configError)}</code><br>
@@ -710,6 +727,9 @@ async function tick() {
         if (lastInner[e.key] !== inner) { el.innerHTML = inner; lastInner[e.key] = inner; }
       }
     }
+    // Cards are live either way; the banner says so when they came from a cached
+    // config.json because the file itself can no longer be read.
+    setConfigWarning(data.configWarning);
     statusEl.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
   } catch (err) {
     statusEl.innerHTML = '<span class="error">Cannot reach server</span>';

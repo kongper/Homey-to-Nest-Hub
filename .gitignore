@@ -1,4 +1,6 @@
 node_modules/
 .env
 config.json
+config/config.json
 npm-debug.log*
+_to_delete/

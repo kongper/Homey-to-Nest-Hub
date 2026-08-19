@@ -169,22 +169,44 @@ function summariseDevice(device, zones) {
 // A parse error is reported rather than swallowed: previously a stray comma made
 // the dashboard say "no dashboard configured yet", which sends you looking in
 // entirely the wrong place.
+// Filesystem-level failures, as opposed to "the JSON is wrong". A bind-mounted
+// *single file* stops being readable once an editor replaces it on the host
+// rather than writing in place — Docker Desktop reports that as ENODATA or a
+// stale handle, and it does not heal until the container is restarted. Mounting
+// the containing directory instead avoids it entirely (see README).
+const IO_ERROR_CODES = new Set(['ENODATA', 'ESTALE', 'EBUSY', 'EIO', 'EACCES', 'EPERM', 'EISDIR']);
+
 let lastConfigError = '';
+let lastGoodConfig = null;
+
 function loadConfig() {
   try {
     const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    if (lastConfigError) console.log(`Config OK again: ${CONFIG_PATH}`);
+    if (lastConfigError) console.log(`Config readable again: ${CONFIG_PATH}`);
     lastConfigError = '';
-    return { config, error: null };
+    lastGoodConfig = config;
+    return { config, error: null, stale: false };
   } catch (err) {
-    // Missing file = genuinely not set up yet. Anything else is a real problem.
-    const error =
-      err?.code === 'ENOENT' ? null : `${path.basename(CONFIG_PATH)}: ${err?.message || err}`;
+    const code = err?.code;
+    const name = path.basename(CONFIG_PATH);
+    let error;
+    if (code === 'ENOENT') {
+      error = null; // genuinely not set up yet
+    } else if (IO_ERROR_CODES.has(code)) {
+      error =
+        `${name}: ${code} — the container cannot read the file. The bind mount has probably ` +
+        `gone stale because the file was replaced on the host; "docker compose restart" fixes it.`;
+    } else {
+      error = `${name}: ${err?.message || err}`; // malformed JSON
+    }
     if (error && error !== lastConfigError) {
       console.error(`Cannot read config — ${error}`);
       lastConfigError = error;
     }
-    return { config: null, error };
+    // Keep serving the last config that parsed, so an unreadable file degrades to
+    // "possibly out of date" rather than blanking the whole dashboard.
+    if (error && lastGoodConfig) return { config: lastGoodConfig, error, stale: true };
+    return { config: null, error, stale: false };
   }
 }
 
@@ -390,7 +412,7 @@ app.get('/api/discover', async (req, res) => {
 
 // The configured dashboard state: only the selected devices/capabilities.
 app.get('/api/state', async (req, res) => {
-  const { config, error: configError } = loadConfig();
+  const { config, error: configError, stale } = loadConfig();
   const entries = normalizeEntities(config);
   if (!entries.length) {
     // configError distinguishes "config.json is broken" from "no config yet".
@@ -467,6 +489,9 @@ app.get('/api/state', async (req, res) => {
       configured: true,
       title: config.title || 'Home Dashboard',
       updatedAt: new Date().toISOString(),
+      // Set when these cards come from a cached config because the file itself
+      // can no longer be read — the dashboard works, but may be out of date.
+      configWarning: stale ? configError : null,
       entities,
     });
   } catch (err) {
@@ -487,9 +512,12 @@ app.post('/api/set', async (req, res) => {
     return res.status(400).json({ error: 'position must be a number (0-100 % down).' });
   }
 
+  // A stale/unreadable file still yields the last good config, and moving a
+  // screen matters more than the file being current — so only refuse when there
+  // is no config at all.
   const { config, error: configError } = loadConfig();
-  if (configError) {
-    return res.status(500).json({ error: `Cannot read config — ${configError}` });
+  if (!config) {
+    return res.status(500).json({ error: configError || 'No config.' });
   }
   const card = sliderCards(config).find((c) => c.key === key);
   if (!card || !card.spec.members.length) {

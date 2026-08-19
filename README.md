@@ -36,7 +36,8 @@ cp .env.example .env
 #    edit .env -> set HOMEY_ADDRESS and HOMEY_TOKEN
 
 # 2. Start with an empty config so the discovery page works
-echo '{ "entities": [] }' > config.json
+mkdir -p config
+echo '{ "entities": [] }' > config/config.json
 
 # 3. Build and run
 docker compose up -d --build
@@ -48,7 +49,7 @@ Homey device with its `deviceId`, capability names (e.g. `measure_temperature`, 
 
 ## Choosing what to display
 
-Edit `config.json` (start from `config.example.json`). Entities are grouped **by size** —
+Edit `config/config.json` (start from `config.example.json`). Entities are grouped **by size** —
 `entities` is an object keyed by size, and each size holds an array of cards:
 
 ```json
@@ -104,11 +105,29 @@ The size group a device sits under chooses one of five levels:
 
 Big and Small show a single centered value; if you give them more than one capability they fall back to labelled rows. Big, Small and Weather share the top grid and can mix on the same row (a Big or Weather takes the space of two Smalls). Cards appear in the order listed in `config.json` within each section.
 
-**No restart needed.** `config.json` is re-read on every request, so saving the file is enough —
-the open dashboards pick it up on their next refresh, within about 5 seconds. If the JSON is
-malformed the page says so and quotes the parser's line number, then recovers by itself once you
-fix it. (If your editor replaces the file rather than writing in place, and the container seems
-stuck on the old config, `docker compose restart` still settles it.)
+**Config changes need no restart.** `config.json` lives in `config/`, which is bind-mounted, and
+it is re-read on every request — so saving the file is enough. Open dashboards pick it up on
+their next refresh, within about 5 seconds.
+
+The directory is mounted rather than the file itself, and that matters: a single-file bind mount
+is pinned to the file that existed when the container started, so the first time an editor saves
+by writing a new file and renaming it over the old one — which most editors do — reads inside the
+container start failing with `ENODATA` and keep failing until you restart. Mounting `config/`
+means the filename is resolved fresh on every read.
+
+If the file can't be read or the JSON is malformed, the dashboard keeps showing the last config
+that parsed and puts a banner at the top saying why, quoting the parser's line number for a syntax
+error. It clears itself once the file is readable again. Sliders keep working throughout.
+
+**Code changes do need a rebuild.** `server.js` and `public/` are copied into the image, not
+mounted, so after editing either one:
+
+```bash
+docker compose up -d --build
+```
+
+`docker compose restart` alone will keep running the old image — which is easy to mistake for the
+change not working.
 
 The dashboard at `http://<host-ip>:8080/` auto-refreshes every 5 seconds (in place, no flicker).
 Booleans render as **Ja/Nei** (or Alarm/Clear for `alarm_*` capabilities); numbers show with

@@ -11,10 +11,14 @@ services:
       HOMEY_TOKEN: ${HOMEY_TOKEN}
       PORT: 3000
       CACHE_TTL: ${CACHE_TTL:-5}
-      CONFIG_PATH: /app/config.json
+      CONFIG_PATH: /app/config/config.json
     volumes:
-      # Edit config.json on the host; changes apply on container restart.
-      - ./config.json:/app/config.json:ro
+      # Mount the *directory*, not the file. A single-file bind mount is pinned to
+      # the file that existed when the container started, so the moment an editor
+      # saves by replacing the file (most of them do), reads inside the container
+      # fail with ENODATA until you restart. Mounting the directory means the name
+      # is resolved fresh on every read, so edits just work.
+      - ./config:/app/config:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
