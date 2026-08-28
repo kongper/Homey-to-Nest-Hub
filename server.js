@@ -87,6 +87,29 @@ function isEmptyValue(v) {
   return false;
 }
 
+// String/enum form: "!=docked", "==mowing", or a comma-separated set such as
+// "!=docked,charging" (show unless the state is one of those). Enum capabilities
+// report their *id* (e.g. "docked"), not the title ("Docked"); the comparison is
+// case-insensitive and trims, so either spelling of the id works. Anything that
+// still doesn't parse is left unfiltered, as before.
+function passesShowIfText(expr, capabilities) {
+  const t = expr.match(/^(==|=|!=)\s*(\S.*)$/);
+  if (!t) return true; // unparseable expression -> don't filter
+  const targets = t[2]
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  if (!targets.length) return true;
+  const strs = capabilities
+    .map((c) => c.value)
+    .filter((v) => typeof v === 'string' && v.trim() !== '');
+  if (!strs.length) return false;
+  const hit = (v) => targets.includes(v.trim().toLowerCase());
+  return t[1] === '!='
+    ? strs.every((v) => !hit(v))
+    : strs.every((v) => hit(v));
+}
+
 // Evaluate a "showIf" comparison expression (e.g. "<20", ">=80", "!=0") against
 // the numeric capability values. Returns true if the card should be shown.
 // Non-numeric values are ignored; if there are no numeric values, it returns false.
@@ -114,7 +137,7 @@ function passesShowIf(expr, capabilities) {
 
   // Numeric form: "<20", ">=80", "!=0", etc.
   const m = s.match(/^(<=|>=|==|=|!=|<|>)\s*(-?\d+(?:\.\d+)?)$/);
-  if (!m) return true; // unparseable expression -> don't filter
+  if (!m) return passesShowIfText(s, capabilities);
   const op = m[1];
   const n = parseFloat(m[2]);
   const nums = capabilities.map((c) => c.value).filter((v) => typeof v === 'number');
@@ -360,6 +383,12 @@ function buildSliderEntity(card, summarise) {
     };
   });
 
+  // "Usable" is the same test the frontend uses for its per-member warning text,
+  // so the status dot and the note underneath it can never disagree.
+  const usable = members.filter(
+    (m) => !m.missing && m.available && m.hasCapability !== false,
+  ).length;
+
   const known = members.map((m) => m.position).filter((p) => typeof p === 'number');
   const position = known.length
     ? Math.round((known.reduce((a, b) => a + b, 0) / known.length) * 10) / 10
@@ -379,7 +408,11 @@ function buildSliderEntity(card, summarise) {
     position,
     mixed: spread > Math.max(spec.step, 2),
     missing: members.every((m) => m.missing),
-    available: members.some((m) => m.available),
+    // Traffic light: green when every member is usable, amber when only some
+    // are, red when none are. `available: false` also greys the whole card, so
+    // it must stay reserved for the all-dead case.
+    available: usable > 0,
+    partial: usable > 0 && usable < members.length,
     hidden: false,
     members,
   };

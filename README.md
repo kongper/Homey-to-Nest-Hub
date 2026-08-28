@@ -90,8 +90,9 @@ Edit `config/config.json` (start from `config.example.json`). Entities are group
     - Numeric: `"<20"`, `"<=20"`, `">80"`, `">=80"`, `"==0"`, `"!=0"`.
     - Boolean: `"==true"`, `"==false"`, `"!=true"`, `"!=false"`.
     - Emptiness: `"!=empty"` (show only when **not** empty) or `"==empty"`. "Empty" means `null`, `false`, `0`, blank, or an all-zero string like `00:00`.
+    - Text/enum: `"==mowing"`, `"!=docked"`, or a comma-separated set — `"!=docked,charging"`. Enum capabilities are compared against their **id** (`docked`), not their title (`Docked`); matching is case-insensitive. Look the ids up on the discovery page.
 
-    Examples: a battery tile that only appears when low — `"capabilities": ["measure_battery"], "showIf": "<20"`; a motion alert only while active — `"showIf": "==true"`; a dishwasher timer that hides at `00:00` — `"capabilities": ["remaining_time"], "showIf": "!=empty"`. (Values of the wrong type are ignored; if a card has several matching values, all must satisfy the condition. `"==true"` matches only boolean `true`, not the number `1`.)
+    Examples: a battery tile that only appears when low — `"capabilities": ["measure_battery"], "showIf": "<20"`; a motion alert only while active — `"showIf": "==true"`; a dishwasher timer that hides at `00:00` — `"capabilities": ["remaining_time"], "showIf": "!=empty"`. (Values of the wrong type are ignored; if a card has several matching values, all must satisfy the condition. `"==true"` matches only boolean `true`, not the number `1`; a text rule only looks at string values, so a card with none stays hidden.)
 
 ### Box levels
 
@@ -132,6 +133,9 @@ change not working.
 The dashboard at `http://<host-ip>:8080/` auto-refreshes every 5 seconds (in place, no flicker).
 Booleans render as **Ja/Nei** (or Alarm/Clear for `alarm_*` capabilities); numbers show with
 their units and a colour scale for temperatures; a status dot shows online / unavailable / alarm.
+Enum capabilities can be shown in Norwegian via the `VALUE_LABELS` map in `public/index.html`
+(capability id → value id → label) — `mower_state` is translated there. This is display only:
+`showIf` still matches the raw value id, so a rule like `"!=docked"` is unaffected.
 The header has a live clock, a **Vis skjulte** ("show hidden") toggle that reveals cards normally
 hidden by their `showIf` rule, and an **Alle enheter** link to the discovery page.
 
@@ -143,7 +147,7 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 | `deviceId`      | property     | Homey device id (copy from the discovery page).                                          |
 | `label`         | property     | Card title. Defaults to the device name.                                                 |
 | `capabilities`  | property     | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
-| `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), or `!=empty`. Ignored on sliders. |
+| `showIf`        | property     | Show only when the condition holds: numeric (`<20`), boolean (`==true`), text/enum (`!=docked`), or `!=empty`. Ignored on sliders. |
 | `deviceIds`     | slider only  | The devices the slider drives. Each item is an id string, or `{ "name": …, "id": …, "min": …, "max": … }`. |
 | `capability`    | slider only  | Capability to write. Default `windowcoverings_set`; blinds exposed as dimmable devices use `dim`. |
 | `min` / `max`   | slider only  | How far a screen travels, in % down. On a member it applies to that device; on the card it's the default for members that don't say. Default `0` / `100`. |
@@ -202,7 +206,8 @@ so that card also needs `"invert": true`. Direction is per card, so mixed hardwa
   range on the member it applies to; on the card it just becomes the default for members that
   don't state their own.
 - **Sent on release.** Dragging only moves the thumb; the command goes out once, when you let
-  go. `Opp` / `Ned` jump to the configured limits, `−` / `+` step by `step`.
+  go. Tapping anywhere on the track jumps there. The track is the whole control — there are no
+  `Opp`/`Ned`/`−`/`+` buttons; `step` still quantises what a drag can land on.
 - **`showIf` is ignored** on sliders — a control that disappears is not a control.
 - The commanded position stays on screen while the screens travel (the live reading is shown
   next to it as *på vei (45 %)*), and the poll can never yank the thumb out from under your

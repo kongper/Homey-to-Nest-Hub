@@ -112,6 +112,7 @@
   .dot { width: 11px; height: 11px; border-radius: 50%; background: #5a6678; flex: none;
     box-shadow: 0 0 0 0 rgba(0,0,0,0); }
   .dot.ok { background: #36d399; box-shadow: 0 0 10px 1px rgba(54,211,153,.7); }
+  .dot.warn { background: #ffd166; box-shadow: 0 0 10px 1px rgba(255,209,102,.7); }
   .dot.bad { background: #ff6b6b; box-shadow: 0 0 10px 1px rgba(255,107,114,.7); animation: pulse 1.6s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 
@@ -176,16 +177,12 @@
     margin-left: -4px; border-radius: 4px; background: #fff; transform: translateY(-50%);
     box-shadow: 0 2px 8px rgba(0,0,0,.5); transition: left .18s ease; }
 
-  .srow { display: flex; align-items: center; gap: .45rem; position: relative; z-index: 2; }
-  .sbtn { font-family: inherit; font-size: .95rem; font-weight: 600; cursor: pointer;
-    background: rgba(255,255,255,.07); color: var(--text);
-    border: 1px solid var(--card-border); border-radius: 11px;
-    min-width: 44px; min-height: 40px; padding: 0 .7rem;
-    touch-action: manipulation; transition: background .15s, border-color .15s; }
-  .sbtn:active { background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
-  .sbtn.wide { flex: 1; }
+  /* The track is the whole control; this row is only the status line. It keeps a
+     fixed height so the card doesn't jump when a message appears or clears. */
+  .srow { display: flex; align-items: center; position: relative; z-index: 2;
+    min-height: 1.15rem; }
   .sstat { margin-left: auto; font-size: .78rem; color: var(--muted); text-align: right;
-    max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sstat.err { color: #ff8a90; }
 
   /* Config problem, shown without blanking a wall display that still works */
@@ -291,6 +288,31 @@ function valueColor(cap) {
   return accentFor(cap.id);
 }
 
+// ---- Enum value labels ---------------------------------------------------
+// Homey reports enum capabilities as their *id* ("docked"), and the app's own
+// titles are English. This maps id -> Norwegian for display only: showIf still
+// matches the raw id server-side, so config.json keeps working unchanged.
+// Add a capability here to translate it; unknown values fall through verbatim.
+const VALUE_LABELS = {
+  mower_state: {
+    idle: 'Venter',
+    mowing: 'Klipper',
+    paused: 'Pauset',
+    docked: 'I dokken',
+    charging: 'Lader',
+    returning: 'På vei hjem',
+    error: 'Feil',
+    unknown: 'Ukjent',
+  },
+};
+
+function valueLabel(capId, v) {
+  const map = VALUE_LABELS[capId];
+  if (!map || typeof v !== 'string') return v;
+  const hit = map[v.trim().toLowerCase()];
+  return hit === undefined ? v : hit;
+}
+
 // ---- Weather icon (reuse window.WX from weather-symbols.js) ---------------
 function isDaytime() { const h = new Date().getHours(); return h >= 6 && h < 21; }
 function weatherIcon(rawValue) {
@@ -332,7 +354,7 @@ function fmtValue(cap, cls) {
     const unit = cap.units ? `<span class="unit">${escapeHtml(cap.units)}</span>` : '';
     return `<span class="value" style="color:${valueColor(cap)}">${num}${unit}</span>`;
   }
-  return `<span class="value" style="color:${valueColor(cap)}">${escapeHtml(String(v))}</span>`;
+  return `<span class="value" style="color:${valueColor(cap)}">${escapeHtml(String(valueLabel(cap.id, v)))}</span>`;
 }
 
 // ---- Sliders -------------------------------------------------------------
@@ -415,13 +437,6 @@ async function commit(key) {
   tick();
 }
 
-function nudge(key, delta) {
-  const st = sliderState(key);
-  if (!st.spec) return;
-  st.shown = snap(st.shown + delta, st.spec);
-  commit(key);
-}
-
 // Drag / tap on the track. Listeners live on the document so cards can be
 // rebuilt without rebinding anything.
 let dragKey = null;
@@ -481,19 +496,6 @@ if (window.PointerEvent) {
   document.addEventListener('mouseup', onUp);
 }
 
-main.addEventListener('click', (ev) => {
-  const btn = ev.target.closest && ev.target.closest('.sbtn[data-act]');
-  if (!btn) return;
-  const key = btn.dataset.key;
-  const st = sliderState(key);
-  if (!st.spec) return;
-  const act = btn.dataset.act;
-  if (act === 'up')        { st.shown = st.spec.min; commit(key); }
-  else if (act === 'down') { st.shown = st.spec.max; commit(key); }
-  else if (act === 'minus') nudge(key, -st.spec.step);
-  else if (act === 'plus')  nudge(key, +st.spec.step);
-});
-
 // Static skeleton — values are filled in by paintSlider so the card never gets
 // its innerHTML replaced under a moving finger.
 function renderSlider(ent) {
@@ -509,10 +511,6 @@ function renderSlider(ent) {
       <div class="knob"></div>
     </div>
     <div class="srow">
-      <button class="sbtn wide" type="button" data-act="up"    data-key="${key}">Opp</button>
-      <button class="sbtn"      type="button" data-act="minus" data-key="${key}">&minus;</button>
-      <button class="sbtn"      type="button" data-act="plus"  data-key="${key}">+</button>
-      <button class="sbtn wide" type="button" data-act="down"  data-key="${key}">Ned</button>
       <span class="sstat"></span>
     </div>`;
 }
@@ -542,6 +540,16 @@ function paintSlider(el, ent) {
   const knob = el.querySelector('.knob');
   const stat = el.querySelector('.sstat');
   if (!posEl || !fill || !knob) return;
+
+  // Slider cards are never re-rendered, so the dot has to be nudged here or it
+  // stays frozen at whatever it was when the card was first built.
+  const dotEl = el.querySelector('.dot');
+  if (dotEl) {
+    const cls = 'dot ' + dotClass(ent);
+    if (dotEl.className !== cls) dotEl.className = cls;
+    const title = dotTitle(ent);
+    if (dotEl.title !== title) dotEl.title = title;
+  }
 
   posEl.innerHTML = `${Math.round(shown)}<span class="unit">%</span>`;
   posEl.classList.toggle('stale', st.pending !== null || st.drag);
@@ -581,10 +589,25 @@ function paintAllSliders() {
 }
 
 function dot(ent) {
-  if (ent.missing || ent.available === false) return '<span class="dot bad" title="Unavailable"></span>';
-  if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true))
-    return '<span class="dot bad" title="Alarm"></span>';
-  return '<span class="dot ok" title="Online"></span>';
+  return `<span class="dot ${dotClass(ent)}" title="${dotTitle(ent)}"></span>`;
+}
+
+// Green / amber / red. Amber only ever comes from a multi-device slider card
+// where some members are reachable and some are not.
+function dotClass(ent) {
+  if (ent.missing || ent.available === false) return 'bad';
+  if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true)) return 'bad';
+  if (ent.partial) return 'warn';
+  return 'ok';
+}
+
+function dotTitle(ent) {
+  const cls = dotClass(ent);
+  if (cls === 'warn') return 'Partly unavailable';
+  if (cls === 'ok') return 'Online';
+  if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true) &&
+      !ent.missing && ent.available !== false) return 'Alarm';
+  return 'Unavailable';
 }
 
 function cardAccent(ent) {
