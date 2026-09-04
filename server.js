@@ -181,6 +181,10 @@ function summariseDevice(device, zones) {
     id: device.id,
     name: device.name,
     class: device.class ?? null,
+    // Homey keeps `available: true` on a Zigbee device it has lost contact
+    // with and only sets this. Without it a card happily shows readings that
+    // stopped arriving months ago.
+    warning: device.warningMessage || null,
     zoneId: device.zone ?? null,
     zoneName: zoneName(zones, device.zone),
     available: device.available ?? null,
@@ -310,6 +314,8 @@ function pageList(config) {
 // entries usually point at the same device (one thermometer shown as a big card
 // and again as a battery row). Memoise for the life of one request. Returns null
 // when the device isn't on Homey.
+// A stale card is worse than an empty one: it invites you to act on a value
+// that stopped being true. Anything with a warning says so on screen.
 function deviceSummariser(devices, zones) {
   const memo = new Map();
   return (deviceId) => {
@@ -424,6 +430,7 @@ function buildSliderEntity(card, summarise) {
       zoneName: summary.zoneName,
       missing: false,
       available: summary.available !== false,
+      warning: summary.warning,
       setable: cap ? cap.setable !== false : false,
       hasCapability: !!cap,
       // `position` is on the slider's 0-100 scale; `devicePosition` is the
@@ -442,6 +449,7 @@ function buildSliderEntity(card, summarise) {
     (m) => !m.missing && m.available && m.hasCapability !== false,
   ).length;
 
+  const warned = members.filter((m) => m.warning);
   const known = members.map((m) => m.position).filter((p) => typeof p === 'number');
   const position = known.length
     ? Math.round((known.reduce((a, b) => a + b, 0) / known.length) * 10) / 10
@@ -461,6 +469,7 @@ function buildSliderEntity(card, summarise) {
     position,
     mixed: spread > Math.max(spec.step, 2),
     missing: members.every((m) => m.missing),
+    warning: warned.length ? warned[0].warning : null,
     // Traffic light: green when every member is usable, amber when only some
     // are, red when none are. `available: false` also greys the whole card, so
     // it must stay reserved for the all-dead case.
@@ -559,6 +568,7 @@ function buildThermoEntity(card, summarise) {
     missing: false,
     available: summary.available !== false && usable > 0,
     partial: summary.available !== false && usable === 1,
+    warning: summary.warning,
     onoff: typeof sCap?.value === 'boolean' ? sCap.value : null,
     onoffSetable: !!sCap && sCap.setable !== false,
     target: typeof tCap?.value === 'number' ? tCap.value : null,
@@ -591,6 +601,11 @@ function lightSpec(entry) {
     .map((c, i) => ({
       capability: c.capability.trim(),
       name: (typeof c.name === 'string' && c.name.trim()) || `Kanal ${i + 1}`,
+      // Some apps expose no capability listener but do publish flow action
+      // cards. Name them here and the switch runs the card instead of writing
+      // the capability; the capability is still what the card *reads*.
+      onAction: typeof c.onAction === 'string' ? c.onAction.trim() : null,
+      offAction: typeof c.offAction === 'string' ? c.offAction.trim() : null,
     }));
   const raw = entry.switchCapability ?? LIGHT_DEFAULTS.switchCapability;
   const switches = (Array.isArray(raw) ? raw : [raw])
@@ -606,6 +621,9 @@ function lightSpec(entry) {
     // listener for, so writing it always fails. "readonly": true says so up
     // front and the card shows the state instead of a control that can't work.
     readonly: entry.readonly === true,
+    // The same escape hatch for a light with no channel rows.
+    onAction: typeof entry.onAction === 'string' ? entry.onAction.trim() : null,
+    offAction: typeof entry.offAction === 'string' ? entry.offAction.trim() : null,
     // "dim": false makes a dimmable lamp behave as a plain switch.
     capability:
       entry.dim === false
@@ -674,22 +692,27 @@ function buildLightEntity(card, summarise) {
     // state, so a two-gang device can be two switches in one card.
     channels: spec.channels.map((c) => {
       const cap = summary.capabilities[c.capability];
+      const viaFlow = !!(c.onAction && c.offAction);
       return {
         capability: c.capability,
         name: c.name,
         missing: !cap,
+        viaFlow,
         onoff: typeof cap?.value === 'boolean' ? cap.value : null,
-        setable: !spec.readonly && !!cap && cap.setable !== false,
+        setable: !spec.readonly && (viaFlow || (!!cap && cap.setable !== false)),
       };
     }),
     // On means every gang is on; when they disagree the card says so and a tap
     // turns them all on.
     onoff: vals.length ? vals.every(Boolean) : null,
     mixed: vals.length > 1 && vals.some(Boolean) && !vals.every(Boolean),
+    warning: summary.warning,
+    viaFlow: !!(spec.onAction && spec.offAction),
     onoffSetable:
       !spec.readonly &&
-      sCaps.length === spec.switchCapabilities.length &&
-      sCaps.every((c) => c.setable !== false),
+      ((spec.onAction && spec.offAction) ||
+        (sCaps.length === spec.switchCapabilities.length &&
+          sCaps.every((c) => c.setable !== false))),
     hasDim: !!dCap,
     // Homey's dim is 0..1; the card is a percentage.
     level: dCap && typeof dCap.value === 'number'
@@ -813,6 +836,7 @@ app.get('/api/state', async (req, res) => {
           zoneName: summary.zoneName,
           class: summary.class,
           available: summary.available,
+          warning: summary.warning,
           missing: false,
           hidden,
           size: SIZES.includes(entry.size) ? entry.size : 'small',
@@ -866,6 +890,16 @@ function writeTarget(req, res) {
     return null;
   }
   return page;
+}
+
+// Run one of a device's own flow action cards. The card id is
+// "homey:device:<deviceId>:<card>"; `runFlowCardAction` derives the uri from it.
+// Note this succeeds even when the device is unreachable — Homey accepts the
+// card and the command goes nowhere, which is why the card also shows warnings.
+async function runDeviceAction(deviceId, card) {
+  const homey = await connect();
+  await homey.flow.runFlowCardAction({ id: `homey:device:${deviceId}:${card}`, args: {} });
+  cache = { ts: 0, data: null };
 }
 
 // Send a set of already-resolved capability writes to one device. Shared by the
@@ -1062,15 +1096,34 @@ async function setLight(req, res, key) {
 
     // `channel` addresses one named row; without it the switch drives them all.
     const chIdx = (req.body || {}).channel;
-    const writes = [];
-    if (hasOnoff) {
-      if (chIdx !== undefined && chIdx !== null) {
-        const ch = Number.isInteger(chIdx) ? spec.channels[chIdx] : null;
-        if (!ch) return res.status(404).json({ key, ok: false, error: `No channel ${chIdx} on ${key}.` });
-        writes.push({ capabilityId: ch.capability, value: onoff, channel: chIdx });
-      } else {
-        for (const capabilityId of spec.switchCapabilities) writes.push({ capabilityId, value: onoff });
+    const ch = chIdx === undefined || chIdx === null
+      ? null
+      : (Number.isInteger(chIdx) ? spec.channels[chIdx] : undefined);
+    if (ch === undefined) {
+      return res.status(404).json({ key, ok: false, error: `No channel ${chIdx} on ${key}.` });
+    }
+
+    // A flow-driven switch bypasses the capability entirely.
+    const actions = ch ? ch : spec;
+    if (hasOnoff && actions.onAction && actions.offAction) {
+      const card = onoff ? actions.onAction : actions.offAction;
+      try {
+        await runDeviceAction(spec.deviceId, card);
+      } catch (err) {
+        return res.status(502).json({ key, ok: false, error: String(err?.message || err) });
       }
+      if (!hasLevel) {
+        return res.json({
+          key, ok: true, partial: false, onoff, level: null,
+          results: [{ card, name, channel: chIdx ?? null, ok: true }],
+        });
+      }
+    }
+
+    const writes = [];
+    if (hasOnoff && !(actions.onAction && actions.offAction)) {
+      if (ch) writes.push({ capabilityId: ch.capability, value: onoff, channel: chIdx });
+      else for (const capabilityId of spec.switchCapabilities) writes.push({ capabilityId, value: onoff });
     }
     if (hasLevel && spec.capability) {
       // The card is a percentage; Homey's dim is 0..1.

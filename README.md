@@ -165,6 +165,7 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 | `dim`           | light        | `false` makes a dimmable lamp behave as a plain switch. A lamp with no dimmer needs nothing. |
 | `step`          | light        | Snap increment for the dimmer, in %. Default `5`.                                        |
 | `readonly`      | light        | `true` when the app reports the capability as setable but never registered a listener, so writes always fail. The card shows the state instead of a switch. |
+| `onAction` / `offAction` | light, or one entry of `switches` | Run one of the **device's own flow action cards** instead of writing the capability. Give the short card id; the card still *reads* its capability. |
 
 Top-level keys: `title` (browser tab / document title) and `entities` (the size→array object above).
 A flat array of entries (each with its own `deviceId` and `size`) is still accepted for backward compatibility.
@@ -310,9 +311,37 @@ A switch, plus a dim track when the lamp has one:
 - **Setting the dimmer usually switches the lamp on** — that is the device's own
   behaviour, not the dashboard's. Some lamps also report `dim: 0` when switched off,
   so the remembered level goes with them.
-- `"readonly": true` is for a device whose app reports the capability as setable but
-  never registered a listener for it, so `setCapabilityValue` always fails with
-  *Missing Capability Listener*. The card then shows **På/Av** instead of a switch
+### When the capability can't be written
+
+Some apps expose no capability listener — `setCapabilityValue` fails with *Missing
+Capability Listener* however setable the capability claims to be — but do publish flow
+action cards for the same thing. Point the switch at those instead:
+
+```json
+{ "capability": "switch_1", "name": "Kanal 1",
+  "onAction":  "action_switch_turned_on_for_switch_1",
+  "offAction": "action_switch_turned_off_for_switch_1" }
+```
+
+Give the short card id; the server runs `homey:device:<deviceId>:<card>`. The capability
+is still what the card *reads*. Find the ids with:
+
+```bash
+node --env-file=.env --input-type=module -e "
+import { HomeyAPI } from 'homey-api';
+const api = await HomeyAPI.createLocalAPI({ address: process.env.HOMEY_ADDRESS, token: process.env.HOMEY_TOKEN });
+const acts = await api.flow.getFlowCardActions();
+for (const a of Object.values(acts)) if (String(a.id).includes('YOUR-DEVICE-ID')) console.log(a.id, '|', a.title);
+process.exit(0);"
+```
+
+A flow action is fire-and-forget: Homey reports success as soon as it accepts the card,
+whether or not the device is reachable, and the capability may take a while to catch up
+or never report at all. The card therefore holds what you commanded for 30 s rather than
+the usual 8 before trusting the reading again.
+
+- `"readonly": true` remains for a device that can't be written at all, by capability or
+  by flow. The card then shows **På/Av** instead of a switch
   that could only ever fail. The Namron two-gang switch (`net.filllip-namron`,
   product 4512768) is one of these — it can be read but not written from Homey's API,
   and the app offers no flow action card for it either.

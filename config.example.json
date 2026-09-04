@@ -31,7 +31,12 @@
         "deviceId": "TWO-GANG-SOCKET-DEVICE-ID",
         "label": "Utelys",
         "switches": [
-          { "capability": "switch_1", "name": "Kanal 1" },
+          {
+            "capability": "switch_1",
+            "name": "Kanal 1",
+            "onAction": "action_switch_turned_on_for_switch_1",
+            "offAction": "action_switch_turned_off_for_switch_1"
+          },
           { "capability": "switch_2", "name": "Kanal 2" }
         ]
       }

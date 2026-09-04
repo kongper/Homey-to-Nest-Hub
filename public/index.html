@@ -94,13 +94,14 @@
 
   .card.big { grid-column: span 2; }
   .card.small { grid-column: span 1; }
-  .card.weather { grid-column: span 1; }
+  .card.weather { grid-column: span 2; }
   .grid.lists .card { grid-column: span 1; }
   .card.unavailable { opacity: .5; filter: grayscale(.5); }
   .card.missing { --accent: #ff6b6b; }
   /* Hidden-by-showIf cards, revealed via the toggle */
   .card.ghost { opacity: .55; border-style: dashed; }
-  .card.ghost .tag {
+  .tag.stale { color: #ffd166; border-color: rgba(255,209,102,.5); }
+  .card.ghost .tag, .tag.stale {
     margin-left: .4rem; font-size: .62em; font-weight: 700; letter-spacing: .04em;
     text-transform: uppercase; color: var(--muted);
     border: 1px solid var(--card-border); border-radius: 6px; padding: .05em .4em;
@@ -754,6 +755,7 @@ function paintSlider(el, ent) {
     let msg = st.msg;
     if (!st.busy && !st.err) {
       if (st.pending !== null) msg = live !== null ? `på vei (${Math.round(live)} %)` : 'på vei';
+      else if (ent.warning) msg = 'ingen kontakt med enheten';
       else if (ent.mixed) msg = 'ulik posisjon';
       else msg = '';
     }
@@ -922,8 +924,13 @@ function paintChannels(el, st, ent) {
     const row = el.querySelector(`.crow[data-ch="${i}"]`);
     if (!row) return;
     const cs = chanState(st, i);
+    // A capability write reads back on the next poll. A flow action card is
+    // fire-and-forget — whether the device reports the change, and how fast, is
+    // the app's business — so hold what we commanded a good deal longer before
+    // falling back to whatever the capability still says.
+    const hold = c.viaFlow ? 30000 : FAST_PENDING_MS;
     if (cs.onoff !== null && !cs.busy &&
-        (c.onoff === cs.onoff || Date.now() - cs.at > FAST_PENDING_MS)) {
+        (c.onoff === cs.onoff || Date.now() - cs.at > hold)) {
       cs.onoff = null;
     }
     paintOneSwitch(row, cs.onoff === null ? c.onoff : cs.onoff, cs.busy, c.setable);
@@ -939,6 +946,7 @@ function paintStat(el, st, ent, extra) {
   if (!st.busy && !st.onoffBusy && !st.err) {
     if (st.pending !== null) msg = 'sender…';
     else if (ent.available === false) msg = 'utilgjengelig';
+    else if (ent.warning) msg = 'ingen kontakt med enheten';
     else if (ent.partial) msg = 'delvis utilgjengelig';
     else msg = extra || '';
   }
@@ -1035,12 +1043,15 @@ function dot(ent) {
 function dotClass(ent) {
   if (ent.missing || ent.available === false) return 'bad';
   if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true)) return 'bad';
-  if (ent.partial) return 'warn';
+  // Homey leaves `available: true` on a device it can no longer reach and only
+  // sets a warning, so the readings below can be arbitrarily old.
+  if (ent.partial || ent.warning) return 'warn';
   return 'ok';
 }
 
 function dotTitle(ent) {
   const cls = dotClass(ent);
+  if (ent.warning && cls === 'warn') return ent.warning;
   if (cls === 'warn') return 'Partly unavailable';
   if (cls === 'ok') return 'Online';
   if ((ent.capabilities || []).some(c => c.id.startsWith('alarm_') && c.value === true) &&
@@ -1079,6 +1090,12 @@ function cardClass(ent) {
 // A small "hidden" tag for revealed cards.
 function hiddenTag(ent) { return ent.hidden ? '<span class="tag">hidden</span>' : ''; }
 
+// Shown on a readout card whose device Homey can no longer reach: the number
+// below it is however old it is.
+function staleNote(ent) {
+  return ent.warning ? '<span class="tag stale" title="' + escapeHtml(ent.warning) + '">ingen kontakt</span>' : '';
+}
+
 // Inner markup of a card (without the outer .card element), so we can update
 // contents in place without re-triggering the card entry animation.
 function renderInner(ent) {
@@ -1093,7 +1110,7 @@ function renderInner(ent) {
       <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
   }
   if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) {
-    return `<div class="head"><span class="title">${title}${hiddenTag(ent)}</span>${dot(ent)}</div>
+    return `<div class="head"><span class="title">${title}${hiddenTag(ent)}${staleNote(ent)}</span>${dot(ent)}</div>
       <div class="single">${fmtValue(ent.capabilities[0])}</div>`;
   }
   if (size === 'weather') {
