@@ -22,6 +22,28 @@
         "capabilities": ["alarm_contact"]
       }
     ],
+    "light": [
+      {
+        "deviceId": "CEILING-LAMP-DEVICE-ID",
+        "label": "Taklys"
+      },
+      {
+        "deviceId": "TWO-GANG-SOCKET-DEVICE-ID",
+        "label": "Utelys",
+        "switches": [
+          { "capability": "switch_1", "name": "Kanal 1" },
+          { "capability": "switch_2", "name": "Kanal 2" }
+        ]
+      }
+    ],
+    "thermostat": [
+      {
+        "deviceId": "HEATER-DEVICE-ID",
+        "label": "Varme utestue",
+        "min": 5,
+        "max": 30
+      }
+    ],
     "slider": [
       {
         "label": "Utestue zip",
@@ -51,5 +73,26 @@
         "showIf": "<20"
       }
     ]
+  },
+  "pages": {
+    "utestue": {
+      "title": "Utestue",
+      "label": "Utestue",
+      "entities": {
+        "big": [
+          {
+            "deviceId": "ROOM-THERMOMETER-DEVICE-ID",
+            "label": "Temp utestue",
+            "capabilities": ["measure_temperature"]
+          }
+        ],
+        "light": [
+          {
+            "deviceId": "CEILING-LAMP-DEVICE-ID",
+            "label": "Taklys"
+          }
+        ]
+      }
+    }
   }
 }

@@ -96,13 +96,15 @@ Edit `config/config.json` (start from `config.example.json`). Entities are group
 
 ### Box levels
 
-The size group a device sits under chooses one of five levels:
+The size group a device sits under chooses one of seven levels:
 
 - **`big`** — extra-large centered value, **2 per row**.
 - **`small`** (the default if you used an unknown size key) — centered value, **4 per row**.
 - **`list`** — title, status dot and the value(s) all on **one line**, no labels. List cards are gathered into a section **below** all the other cards, 2 per row.
 - **`weather`** — title on top, then the value(s) on one line below with no labels — ideal for a temperature plus a `weather_description` icon (`"capabilities": ["measure_temperature", "weather_description"]`). Spans 2 columns in the top grid.
 - **`slider`** — a **control**, not a readout: drag or tap to set a position on one or more devices at once. See [Sliders](#sliders-zip-screens-blinds) below. 2 per row, in their own section between the top grid and the lists.
+- **`thermostat`** — also a **control**: an on/off switch in the header and a dial for the target temperature. See [Thermostats](#thermostats) below. Takes one slot in the top grid, like a Small.
+- **`light`** — a **control**: a switch, plus a dim track when the lamp has one. See [Lights](#lights) below. Takes one slot in the top grid.
 
 Big and Small show a single centered value; if you give them more than one capability they fall back to labelled rows. Big, Small and Weather share the top grid and can mix on the same row (a Big or Weather takes the space of two Smalls). Cards appear in the order listed in `config.json` within each section.
 
@@ -143,7 +145,7 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 
 | Key / property  | Where        | Purpose                                                                                  |
 | --------------- | ------------ | ---------------------------------------------------------------------------------------- |
-| size            | grouping key | `big`, `small`, `list`, `weather`, or `slider`. The card's layout/level.                 |
+| size            | grouping key | `big`, `small`, `list`, `weather`, `slider`, `thermostat` or `light`. The card's layout/level. |
 | `deviceId`      | property     | Homey device id (copy from the discovery page).                                          |
 | `label`         | property     | Card title. Defaults to the device name.                                                 |
 | `capabilities`  | property     | Capability ids to show. Omit/empty = all of the device's capabilities.                   |
@@ -153,6 +155,16 @@ hidden by their `showIf` rule, and an **Alle enheter** link to the discovery pag
 | `min` / `max`   | slider only  | How far a screen travels, in % down. On a member it applies to that device; on the card it's the default for members that don't say. Default `0` / `100`. |
 | `step`          | slider only  | Snap increment in %, on the slider's own 0–100 scale. Default `5`.                        |
 | `invert`        | slider only  | Flip the direction if 100 % closes the wrong way. Default `false`. See below.             |
+| `min` / `max`   | thermostat   | Ends of the dial, in degrees. Default: whatever the capability itself accepts.            |
+| `step`          | thermostat   | Snap increment in degrees. Default: the capability's own step, else `0.5`.                |
+| `capability`    | thermostat   | The temperature to write. Default `target_temperature`.                                  |
+| `switchCapability` | thermostat | The capability behind the switch. Default `onoff`.                                       |
+| `switchCapability` | light     | The capability behind the switch, or a **list** of them for a multi-gang device wired to one lamp. Default `onoff`. |
+| `switches`      | light        | A named row per channel: `[{ "capability": "switch_1", "name": "Kanal 1" }, …]`. Use this instead of `switchCapability` when the gangs are separate lamps. |
+| `capability`    | light        | The dimmer. Default `dim`. Written as Homey's 0..1; the card shows 0-100 %.               |
+| `dim`           | light        | `false` makes a dimmable lamp behave as a plain switch. A lamp with no dimmer needs nothing. |
+| `step`          | light        | Snap increment for the dimmer, in %. Default `5`.                                        |
+| `readonly`      | light        | `true` when the app reports the capability as setable but never registered a listener, so writes always fail. The card shows the state instead of a switch. |
 
 Top-level keys: `title` (browser tab / document title) and `entities` (the size→array object above).
 A flat array of entries (each with its own `deviceId` and `size`) is still accepted for backward compatibility.
@@ -229,6 +241,118 @@ authentication (see [Security](#security) above). The write path is deliberately
 listed under a `slider` card can be written, and only on that card's capability. Everything is
 clamped server-side. Keep it on the LAN.
 
+## Pages (one screen per room)
+
+The dashboard can serve more than one page from the same config file and the same
+HTML — one per display. The root page is the top-level `entities`, exactly as before;
+extra pages go under `pages`:
+
+```json
+{
+  "title": "Home Dashboard",
+  "label": "Kjøkken",
+  "entities": { "...the kitchen display..." },
+  "pages": {
+    "utestue": {
+      "title": "Utestue",
+      "label": "Utestue",
+      "entities": { "...the sunroom display..." }
+    }
+  }
+}
+```
+
+`http://<host-ip>:8080/utestue` then serves that page's cards. Each page's `label`
+becomes a link in the top right of every *other* page, so the displays link to each
+other with no extra config. `title` is the browser/document title.
+
+- **Card keys are per page.** `slider:0` on `/utestue` and `slider:0` on `/` are
+  different devices, so every write carries its page and is checked against that
+  page's card list. The write whitelist stays exactly as narrow as it was.
+- Extra pages lay themselves out for whatever screen they are on
+  (`repeat(auto-fit, minmax(...))`) rather than the root page's fixed four columns,
+  and their controls get bigger finger targets — they are meant to be touched, not
+  read from across a room.
+- The same device may appear on as many pages as you like.
+
+## Lights
+
+A switch, plus a dim track when the lamp has one:
+
+```json
+"light": [
+  { "deviceId": "CEILING-LAMP-ID", "label": "Taklys" },
+  { "deviceId": "TWO-GANG-SOCKET-ID", "label": "Utelys",
+    "switchCapability": ["switch_1", "switch_2"], "readonly": true }
+]
+```
+
+- A device with **no dim capability** simply renders as a plain switch — that is not
+  an error worth a warning light. `"dim": false` forces the same on a lamp that has
+  one.
+- **Two keys, two behaviours, no flag between them.** `switchCapability: ["switch_1",
+  "switch_2"]` gangs the channels into *one* switch: it reads as on when every gang is
+  on, a tap writes them all, and the card says `ulik` when they disagree. `switches:
+  [{capability, name}, …]` gives each channel its **own labelled row and switch** inside
+  the same card, each with its own state — that is the one to use when the gangs are
+  separate lamps:
+
+  ```json
+  { "deviceId": "TWO-GANG-DEVICE-ID", "label": "Utelys",
+    "switches": [
+      { "capability": "switch_1", "name": "Kanal 1" },
+      { "capability": "switch_2", "name": "Kanal 2" }
+    ] }
+  ```
+
+  A row write carries `channel: <index>` and touches only that capability. Rename the
+  channels in `config.json`; nothing else needs to change.
+- **Setting the dimmer usually switches the lamp on** — that is the device's own
+  behaviour, not the dashboard's. Some lamps also report `dim: 0` when switched off,
+  so the remembered level goes with them.
+- `"readonly": true` is for a device whose app reports the capability as setable but
+  never registered a listener for it, so `setCapabilityValue` always fails with
+  *Missing Capability Listener*. The card then shows **På/Av** instead of a switch
+  that could only ever fail. The Namron two-gang switch (`net.filllip-namron`,
+  product 4512768) is one of these — it can be read but not written from Homey's API,
+  and the app offers no flow action card for it either.
+
+## Thermostats
+
+The second writable card: an on/off switch in the header and a dial for the target temperature.
+It takes one slot in the top grid, the same width as a Small.
+
+```json
+"thermostat": [
+  {
+    "deviceId": "HEATER-DEVICE-ID",
+    "label": "Varme utestue"
+  }
+]
+```
+
+That is the whole minimum — the dial reads its own range and step from the device. Add `min`,
+`max` or `step` when the device's range is wider than you want on a wall: a heater that accepts
+5–45 °C is fine as a dial, but 5–30 gives you far more room per degree.
+
+- **The switch is the only tap target in the header, the dial the only one below it**, so a finger
+  on one can never move the other. The switch answers immediately and keeps its new state until
+  the poll agrees with it.
+- **The dial is dragged like a slider track**: put a finger anywhere on it and move around the
+  arc. It is a 270° arc with the gap at the bottom, and dragging into that gap snaps to the
+  nearer end, so both end stops stay reachable. The value is sent **on release**.
+- The arc and the numeral take the same temperature colour the readout cards use, and go grey
+  when the device is off — the dial still works there, so you can set a target before switching on.
+- Like sliders, thermostat cards ignore `showIf`: a control that disappears is not a control.
+- The line under the dial is where a failed write, `utilgjengelig` or `kan ikke stilles` shows up.
+  It is the only feedback there is, so don't remove it.
+
+The same requirements as sliders apply: a **write-capable** `HOMEY_TOKEN`, and the device must
+expose `onoff` / `target_temperature` as **setable** (check `/discover.html`). The write path is
+just as narrow — `POST /api/set` takes the card key `thermo:<n>`, and only the two capabilities
+that card names, on that one device, can ever be written. The temperature is clamped server-side
+to the same range the dial draws.
+
 ## Weather icons (YR)
 
 The capability `weather_description` is rendered as a **YR weather icon** instead of text.
@@ -265,8 +389,9 @@ HOMEY_ADDRESS=http://192.168.1.50 HOMEY_TOKEN=xxx node server.js
 | --------------- | ------------------------------------------------------------- |
 | `/`             | The dashboard (configured devices).                           |
 | `/discover.html`| Lists all devices/capabilities with IDs for setup.            |
-| `/api/state`    | JSON: only the configured entities + current values. Add `?showHidden=1` to also return `showIf`-hidden cards (flagged `hidden: true`). |
-| `POST /api/set` | Move a slider. Body `{ "key": "slider:0", "position": 45 }` (position in % down). Only accepts cards defined under `slider` in `config.json`. |
+| `/api/state`    | JSON: only the configured entities + current values. `?page=<name>` selects an extra page (omit for the root dashboard). Add `showHidden=1` to also return `showIf`-hidden cards (flagged `hidden: true`). |
+| `POST /api/set` | Write to one control. Body carries the card key, the `page` it belongs to, and the value: `{ "key": "slider:0", "position": 45 }` (% down), `{ "key": "thermo:0", "onoff": true, "temperature": 21 }`, or `{ "key": "light:0", "onoff": true, "level": 60 }` (% brightness). Only cards defined on that page in `config.json` are accepted. |
+| `/<page>`       | An extra page, e.g. `/utestue`. Same HTML as `/`; the card list comes from `pages.<page>` in `config.json`. |
 | `/api/discover` | JSON: all devices + all capabilities.                         |
 | `/api/health`   | `{ "ok": true }` health check (used by the Docker healthcheck). |
 

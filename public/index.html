@@ -94,7 +94,7 @@
 
   .card.big { grid-column: span 2; }
   .card.small { grid-column: span 1; }
-  .card.weather { grid-column: span 2; }
+  .card.weather { grid-column: span 1; }
   .grid.lists .card { grid-column: span 1; }
   .card.unavailable { opacity: .5; filter: grayscale(.5); }
   .card.missing { --accent: #ff6b6b; }
@@ -185,6 +185,76 @@
     max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sstat.err { color: #ff8a90; }
 
+  /* ---- Writable cards: switch, track, dial ------------------------------ */
+  /* Light and thermostat cards borrow the slider card's metrics, so the three
+     controls read as one family. In every one of them the switch is the only
+     tap target in the header and the track or dial the only one below it, so a
+     finger on one can never move the other. */
+  .card.light, .card.thermostat { grid-column: span 1; padding: .7rem 1.1rem .55rem; }
+  .card.light .head, .card.thermostat .head { justify-content: flex-start; gap: .38rem; }
+  .card.light .title, .card.thermostat .title { font-size: 1rem; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.light .pos { margin-left: auto; font-variant-numeric: tabular-nums;
+    font-weight: 750; font-size: 1.35rem; line-height: 1; color: var(--accent); }
+  .card.light .pos .unit { font-size: .5em; }
+  .card.light .pos.stale { opacity: .6; }
+  .card.light .pos.dim-off { color: var(--muted); }
+  /* A device the app won't let us write shows its state rather than a control
+     that could only ever fail. */
+  .card.light .pill.state, .card.thermostat .pill.state { margin-left: auto; }
+  /* One row per named channel, each with its own control. */
+  .card.light .chans { position: relative; z-index: 2; display: flex; flex-direction: column;
+    gap: .45rem; margin-top: .5rem; }
+  .card.light .crow { display: flex; align-items: center; gap: .5rem; min-height: 26px; }
+  .card.light .crow .cname { color: var(--muted); font-size: .95rem; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.light .crow .sw, .card.light .crow .pill.state { margin-left: auto; }
+
+  /* A lamp with no dimmer is just the header and the status line. */
+  .card.light.plain .sw { margin-left: auto; }
+  .card.light.plain { padding-bottom: .7rem; }
+
+  .sw { flex: none; position: relative; z-index: 3;
+    width: 46px; height: 26px; padding: 0; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--card-border); background: rgba(255,255,255,.10);
+    touch-action: manipulation; transition: background .2s, border-color .2s; }
+  .sw .kn { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+    border-radius: 50%; background: #b9c4e4; box-shadow: 0 2px 6px rgba(0,0,0,.5);
+    transition: left .2s ease, background .2s ease; }
+  .sw.on { background: rgba(54,211,153,.34); border-color: rgba(54,211,153,.6); }
+  .sw.on .kn { left: 22px; background: #eafff5; }
+  .sw.busy { opacity: .55; }
+  .sw:disabled { opacity: .35; cursor: default; }
+
+  /* Thermostat dial: a 270-degree arc with the gap at the bottom. */
+  .dial { display: block; width: 100%; max-width: 158px; margin: .1rem auto 0;
+    position: relative; z-index: 2; touch-action: none; cursor: pointer; }
+  .dial .bg { fill: none; stroke: rgba(255,255,255,.10); stroke-linecap: round; }
+  .dial .val { fill: none; stroke-linecap: round;
+    transition: stroke-dashoffset .18s ease, stroke .2s ease; }
+  .dial .knob { transition: cx .18s ease, cy .18s ease; }
+  .dial.dragging .val, .dial.dragging .knob { transition: none; }
+  .dial .num { text-anchor: middle; font-variant-numeric: tabular-nums; font-weight: 750; }
+  .dial .deg { text-anchor: middle; fill: var(--muted); font-weight: 600; }
+  .dial.pend .num { opacity: .62; }
+  .dial.off .bg { stroke: rgba(255,255,255,.06); }
+
+  /* Extra pages (one per room display) size themselves to whatever screen they
+     are on, rather than to the kitchen page's fixed 4-column 1024x600 grid. */
+  body.subpage .grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  body.subpage .grid.sliders { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  body.subpage .grid.lists { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  /* A room panel is touched, not glanced at from across a kitchen, and it has
+     the height to spare -- so the finger targets grow. */
+  body.subpage .track { height: 52px; }
+  body.subpage .track .knob { width: 10px; height: 40px; margin-left: -5px; }
+  body.subpage .dial { max-width: 180px; margin: .15rem auto .15rem; }
+  /* Grid rows stretch to their tallest card. Centring a control's contents uses
+     that height instead of leaving it dead under the track. */
+  body.subpage .card.light, body.subpage .card.thermostat, body.subpage .card.slider {
+    display: flex; flex-direction: column; justify-content: center; }
+  .plinks { display: inline-flex; gap: .7rem; }
+
   /* Config problem, shown without blanking a wall display that still works */
   .banner { margin: 1rem 1.4rem -.2rem; padding: .7rem 1rem; border-radius: 12px;
     font-size: .9rem; line-height: 1.45; color: #ffc9cc;
@@ -206,6 +276,7 @@
     <div class="meta">
       <span id="status">Loading…</span>
       <button id="toggleHidden" class="toggle" type="button">Vis skjulte</button>
+      <span id="pagelinks" class="plinks"></span>
       <a href="discover.html">Alle enheter</a>
     </div>
   </header>
@@ -215,14 +286,33 @@
 <script src="weather-symbols.js"></script>
 <script>
 const REFRESH_MS = 5000;
-const SIZES = ['big', 'small', 'list', 'weather', 'slider'];
+const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light'];
 // How long to keep showing the position we commanded while the screens travel
 // there, before trusting the live reading again.
 const PENDING_MS = 25000;
+// Which page this is: "" for the dashboard at /, or the name of an extra page
+// from config.json's `pages`, which the server serves from this same file at
+// /<name>. Every fetch and every write carries it.
+const PAGE = (() => {
+  const p = decodeURIComponent(location.pathname.replace(/^\/+/, '').replace(/\.html$/, ''));
+  return p === 'index' ? '' : p;
+})();
+document.body.classList.toggle('subpage', !!PAGE);
+
 const main = document.getElementById('main');
 const statusEl = document.getElementById('status');
 const toggleBtn = document.getElementById('toggleHidden');
 const warnEl = document.getElementById('cfgwarn');
+const linksEl = document.getElementById('pagelinks');
+
+// Links to the other room displays, straight from the config.
+function setPageLinks(pages, current) {
+  const html = (pages || [])
+    .filter((p) => p.name !== current)
+    .map((p) => `<a href="${escapeHtml(p.path)}">${escapeHtml(p.label)}</a>`)
+    .join('');
+  if (linksEl.innerHTML !== html) linksEl.innerHTML = html;
+}
 
 // A config.json problem the dashboard is surviving: the cards below are live
 // readings, but the card *list* is whatever last parsed.
@@ -357,19 +447,39 @@ function fmtValue(cap, cls) {
   return `<span class="value" style="color:${valueColor(cap)}">${escapeHtml(String(valueLabel(cap.id, v)))}</span>`;
 }
 
-// ---- Sliders -------------------------------------------------------------
-// Per-card UI state. `shown` is what the thumb sits at, `pending` is a position
-// we have commanded and are waiting for the screens to reach. Neither is ever
-// overwritten by the 5 s poll while the user has a finger down.
-const sliders = {};        // key -> { spec, shown, pending, pendingAt, drag, busy, seq, msg, err }
-let lastSliderEnt = {};    // key -> latest slider entity from /api/state
+// ---- Writable cards: sliders, lights, thermostats ------------------------
+// All three are the same machine: a value the user drags, sent on release, plus
+// a switch on lights and thermostats. Per-card UI state lives here. `shown` is
+// where the control sits, `pending` is a value we have commanded and are still
+// waiting for the device to reach. Neither is ever overwritten by the 5 s poll
+// while the user has a finger down.
+const sliders = {};        // key -> ui state, for every writable card
+let lastCtrl = {};         // key -> latest writable entity from /api/state
+
+// A screen physically travels; a light level and a target temperature read back
+// on the very next poll, so those give up waiting much sooner.
+const FAST_PENDING_MS = 8000;
 
 function sliderState(key) {
   if (!sliders[key]) {
-    sliders[key] = { spec: null, shown: 0, pending: null, pendingAt: 0,
-                     drag: false, busy: false, seq: 0, msg: '', err: false };
+    sliders[key] = { kind: 'slider', spec: null, shown: 0, pending: null, pendingAt: 0,
+                     drag: false, busy: false, seq: 0, msg: '', err: false,
+                     // The switch: an optimistic value with its own sequence, so
+                     // a slow reply can neither flip it back under a newer tap
+                     // nor strand a value write that overlapped it.
+                     onoff: null, onoffAt: 0, onoffBusy: false, swSeq: 0 };
   }
   return sliders[key];
+}
+
+function pendingMs(st) { return st.kind === 'slider' ? PENDING_MS : FAST_PENDING_MS; }
+
+// A named channel gets the same optimistic-switch treatment as a whole card,
+// just kept per row.
+function chanState(st, i) {
+  st.ch = st.ch || {};
+  if (!st.ch[i]) st.ch[i] = { onoff: null, at: 0, busy: false, seq: 0 };
+  return st.ch[i];
 }
 
 // Snap to the step grid, but keep the exact limits reachable: with step 5 and
@@ -377,8 +487,22 @@ function sliderState(key) {
 function snap(v, spec) {
   if (v <= spec.min) return spec.min;
   if (v >= spec.max) return spec.max;
-  const stepped = Math.round(v / spec.step) * spec.step;
+  const stepped = Math.round((v - spec.min) / spec.step) * spec.step + spec.min;
   return Math.min(spec.max, Math.max(spec.min, Math.round(stepped * 10) / 10));
+}
+
+// ---- The gesture ---------------------------------------------------------
+// The horizontal track and the thermostat's dial are dragged by the very same
+// handlers; only the mapping from a pointer position to a value differs. All the
+// dial's geometry comes from ARC, so the path, its length, the knob and the
+// pointer maths can never drift apart.
+const ARC = { cx: 100, cy: 80, r: 72, start: -135, span: 270 };
+const ARC_D = 'M 49.09 130.91 A 72 72 0 1 1 150.91 130.91';
+const ARC_LEN = ARC.r * ARC.span * Math.PI / 180;
+
+function arcPoint(frac) {
+  const a = (ARC.start + ARC.span * frac) * Math.PI / 180;
+  return { x: ARC.cx + ARC.r * Math.sin(a), y: ARC.cy - ARC.r * Math.cos(a) };
 }
 
 function pctFromEvent(track, clientX) {
@@ -387,7 +511,30 @@ function pctFromEvent(track, clientX) {
   return ((clientX - r.left) / r.width) * 100;
 }
 
-// Send the position. A per-card sequence number means a slow response from an
+// Angle of the finger around the dial's centre. The gap at the bottom is
+// contiguous with both ends, so clamping the angle reaches each end stop by
+// itself -- drag past the end and you get the end.
+function tempFromEvent(dial, clientX, clientY, spec) {
+  const r = dial.getBoundingClientRect();
+  if (!r.width || !r.height) return spec.min;
+  const cx = r.left + r.width * (ARC.cx / 200);
+  const cy = r.top + r.height * (ARC.cy / 142);
+  let a = Math.atan2(clientX - cx, -(clientY - cy)) * 180 / Math.PI;
+  a = Math.min(ARC.start + ARC.span, Math.max(ARC.start, a));
+  return spec.min + ((a - ARC.start) / ARC.span) * (spec.max - spec.min);
+}
+
+function valueFromEvent(ctrl, ev, spec) {
+  if (ctrl.classList.contains('dial')) {
+    return snap(tempFromEvent(ctrl, ev.clientX, ev.clientY, spec), spec);
+  }
+  // A track always spans the whole of its card's range: 0-100 % for a screen or
+  // a dimmer, min..max degrees for anything measured in degrees.
+  const pct = pctFromEvent(ctrl, ev.clientX);
+  return snap(spec.min + (pct / 100) * (spec.max - spec.min), spec);
+}
+
+// Send the value. A per-card sequence number means a slow response from an
 // earlier drag can never clobber a newer one.
 async function commit(key) {
   const st = sliderState(key);
@@ -399,29 +546,37 @@ async function commit(key) {
   st.busy = true;
   st.err = false;
   st.msg = 'Sender…';
-  paintAllSliders();
+  paintAllControls();
+
+  const body = { key, page: PAGE };
+  if (st.kind === 'thermo') body.temperature = target;
+  else if (st.kind === 'light') body.level = target;
+  else body.position = target;
 
   try {
     const res = await fetch('api/set', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, position: target }),
+      body: JSON.stringify(body),
       cache: 'no-store',
     });
     const data = await res.json().catch(() => ({}));
     if (seq !== st.seq) return;               // superseded by a newer drag
     st.busy = false;
-    // A response that lands while a finger is down must not move the thumb —
-    // report the outcome, but leave the position the user is choosing alone.
+    // A response that lands while a finger is down must not move the control --
+    // report the outcome, but leave the value the user is choosing alone.
     if (!res.ok || data.ok === false) {
       st.err = true;
       st.msg = data.error ? String(data.error).slice(0, 90) : `Feil (HTTP ${res.status})`;
       if (!st.drag) st.pending = null;         // fall back to the live reading
     } else {
-      if (!st.drag && typeof data.position === 'number') { st.pending = data.position; st.shown = data.position; }
+      const got = st.kind === 'thermo' ? data.temperature
+                : st.kind === 'light' ? data.level
+                : data.position;
+      if (!st.drag && typeof got === 'number') { st.pending = got; st.shown = got; }
       const failed = (data.results || []).filter(r => !r.ok);
       st.err = failed.length > 0;
-      // On success the "på vei" readout below is the feedback, so no message.
+      // On success the readout itself is the feedback, so no message.
       st.msg = failed.length
         ? `${failed[0].name || 'Enhet'}: ${failed[0].error}`.slice(0, 90) +
           (failed.length > 1 ? ` (+${failed.length - 1})` : '')
@@ -433,49 +588,51 @@ async function commit(key) {
     if (!st.drag) st.pending = null;
     st.msg = 'Ingen forbindelse';
   }
-  paintAllSliders();
+  paintAllControls();
   tick();
 }
 
-// Drag / tap on the track. Listeners live on the document so cards can be
-// rebuilt without rebinding anything.
+// Drag / tap on a track or a dial. Listeners live on the document so cards can
+// be rebuilt without rebinding anything.
 let dragKey = null;
+let dragEl = null;
 
 function onDown(ev) {
-  const track = ev.target.closest && ev.target.closest('.track[data-key]');
-  if (!track) return;
-  const key = track.dataset.key;
+  const ctrl = ev.target.closest && ev.target.closest('.track[data-key], .dial[data-key]');
+  if (!ctrl) return;
+  const key = ctrl.dataset.key;
   const st = sliderState(key);
   if (!st.spec) return;
   dragKey = key;
+  dragEl = ctrl;
   st.drag = true;
-  st.shown = snap(pctFromEvent(track, ev.clientX), st.spec);
-  track.classList.add('dragging');
-  if (track.setPointerCapture && ev.pointerId !== undefined) {
-    try { track.setPointerCapture(ev.pointerId); } catch {}
+  st.shown = valueFromEvent(ctrl, ev, st.spec);
+  ctrl.classList.add('dragging');
+  if (ctrl.setPointerCapture && ev.pointerId !== undefined) {
+    try { ctrl.setPointerCapture(ev.pointerId); } catch {}
   }
   ev.preventDefault();
-  paintAllSliders();
+  paintAllControls();
 }
 
 function onMove(ev) {
-  if (!dragKey) return;
+  if (!dragKey || !dragEl) return;
   const st = sliderState(dragKey);
-  const track = document.querySelector(`.track[data-key="${dragKey}"]`);
-  if (!track || !st.spec) return;
-  st.shown = snap(pctFromEvent(track, ev.clientX), st.spec);
+  if (!st.spec) return;
+  st.shown = valueFromEvent(dragEl, ev, st.spec);
   ev.preventDefault();
-  paintAllSliders();
+  paintAllControls();
 }
 
 function onUp() {
   if (!dragKey) return;
   const key = dragKey;
+  const el = dragEl;
   dragKey = null;
+  dragEl = null;
   const st = sliderState(key);
   st.drag = false;
-  const track = document.querySelector(`.track[data-key="${key}"]`);
-  if (track) track.classList.remove('dragging');
+  if (el) el.classList.remove('dragging');
   commit(key);                               // one command, on release
 }
 
@@ -486,17 +643,75 @@ if (window.PointerEvent) {
   document.addEventListener('pointercancel', onUp);
 } else {
   // Older cast/webview runtimes without Pointer Events.
-  document.addEventListener('touchstart', (e) => onDown(Object.assign({}, e, {
-    target: e.target, clientX: e.touches[0].clientX, preventDefault: () => e.preventDefault() })));
+  document.addEventListener('touchstart', (e) => onDown({
+    target: e.target, clientX: e.touches[0].clientX, clientY: e.touches[0].clientY,
+    preventDefault: () => e.preventDefault() }));
   document.addEventListener('touchmove', (e) => onMove({
-    clientX: e.touches[0].clientX, preventDefault: () => e.preventDefault() }));
+    clientX: e.touches[0].clientX, clientY: e.touches[0].clientY,
+    preventDefault: () => e.preventDefault() }));
   document.addEventListener('touchend', onUp);
   document.addEventListener('mousedown', onDown);
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 }
 
-// Static skeleton — values are filled in by paintSlider so the card never gets
+// The control in a card's header or channel row: a switch when the device can
+// actually be written, otherwise a plain state pill. Shared by lights and
+// thermostats. `ch` addresses one named channel; omit it for the whole card.
+function switchEl(ent, ch) {
+  const setable = ch ? ch.setable !== false : ent.onoffSetable !== false;
+  if (!setable) return `<span class="pill state off">—</span>`;
+  const attr = ch ? ` data-ch="${ch.index}"` : '';
+  const label = ch ? `${escapeHtml(ch.name)} av/på` : 'Av/på';
+  return `<button class="sw" type="button" data-key="${escapeHtml(ent.key)}"${attr} aria-label="${label}"><span class="kn"></span></button>`;
+}
+
+// Reconcile one switch (or its read-only pill) against a live value.
+function paintOneSwitch(scope, on, busy, setable) {
+  const sw = scope.querySelector('.sw');
+  if (sw) {
+    sw.classList.toggle('on', on === true);
+    sw.classList.toggle('busy', !!busy);
+    sw.disabled = setable === false;
+    return;
+  }
+  const pill = scope.querySelector('.pill.state');
+  if (!pill) return;
+  const cls = 'pill state ' + (on === true ? 'on' : 'off');
+  if (pill.className !== cls) pill.className = cls;
+  const txt = on === true ? 'På' : on === false ? 'Av' : '—';
+  if (pill.textContent !== txt) pill.textContent = txt;
+}
+
+// Repaint the dot on a card that is never re-rendered, or it freezes at
+// whatever it was when the card was first built.
+function paintDot(el, ent) {
+  const dotEl = el.querySelector('.dot');
+  if (!dotEl) return;
+  const cls = 'dot ' + dotClass(ent);
+  if (dotEl.className !== cls) dotEl.className = cls;
+  const t = dotTitle(ent);
+  if (dotEl.title !== t) dotEl.title = t;
+}
+
+// Move `shown` towards the live reading, unless the user is dragging or we are
+// still waiting for something we commanded to arrive.
+function settleValue(st, live) {
+  if (st.drag) return;
+  if (st.pending !== null) {
+    const tol = Math.max(st.spec.step, st.kind === 'slider' ? 3 : 0.5);
+    const arrived = live !== null && Math.abs(live - st.pending) <= tol;
+    if (arrived || Date.now() - st.pendingAt > pendingMs(st)) {
+      st.pending = null;
+      if (live !== null) st.shown = live;
+    }
+  } else if (live !== null) {
+    st.shown = live;
+  }
+}
+
+// ---- Slider (one or more screens on one track) ---------------------------
+// Static skeleton -- values are filled in by paintSlider so the card never gets
 // its innerHTML replaced under a moving finger.
 function renderSlider(ent) {
   const title = escapeHtml(ent.label);
@@ -515,41 +730,20 @@ function renderSlider(ent) {
     </div>`;
 }
 
-// Reconcile one slider card against the latest server reading.
 function paintSlider(el, ent) {
   const st = sliderState(ent.key);
+  st.kind = 'slider';
   st.spec = { min: ent.min, max: ent.max, step: ent.step };
   const live = typeof ent.position === 'number' ? ent.position : null;
-
-  if (!st.drag) {
-    if (st.pending !== null) {
-      const tol = Math.max(st.spec.step, 3);
-      const arrived = live !== null && Math.abs(live - st.pending) <= tol;
-      if (arrived || Date.now() - st.pendingAt > PENDING_MS) {
-        st.pending = null;
-        if (live !== null) st.shown = live;
-      }
-    } else if (live !== null) {
-      st.shown = live;
-    }
-  }
+  settleValue(st, live);
 
   const shown = snap(st.shown, st.spec);
   const posEl = el.querySelector('.pos');
   const fill = el.querySelector('.fill');
   const knob = el.querySelector('.knob');
   const stat = el.querySelector('.sstat');
+  paintDot(el, ent);
   if (!posEl || !fill || !knob) return;
-
-  // Slider cards are never re-rendered, so the dot has to be nudged here or it
-  // stays frozen at whatever it was when the card was first built.
-  const dotEl = el.querySelector('.dot');
-  if (dotEl) {
-    const cls = 'dot ' + dotClass(ent);
-    if (dotEl.className !== cls) dotEl.className = cls;
-    const title = dotTitle(ent);
-    if (dotEl.title !== title) dotEl.title = title;
-  }
 
   posEl.innerHTML = `${Math.round(shown)}<span class="unit">%</span>`;
   posEl.classList.toggle('stale', st.pending !== null || st.drag);
@@ -574,6 +768,245 @@ function paintSlider(el, ent) {
   }
 }
 
+// ---- Light (a switch, and a dim track when the lamp has one) -------------
+function renderLight(ent) {
+  const title = escapeHtml(ent.label);
+  const key = escapeHtml(ent.key);
+  if (ent.missing) {
+    return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
+      <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
+  }
+  // Named channels replace the single header switch with a row each.
+  const chans = (ent.channels || []).length
+    ? `<div class="chans">${ent.channels.map((c, i) => `<div class="crow" data-ch="${i}">
+          <span class="cname">${escapeHtml(c.name)}</span>
+          ${switchEl(ent, { ...c, index: i })}
+        </div>`).join('')}</div>`
+    : '';
+  if (chans) {
+    return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
+      ${chans}
+      ${ent.hasDim ? `<div class="track" data-key="${key}"><div class="fill"></div><div class="knob"></div></div>` : ''}
+      <div class="srow"><span class="sstat"></span></div>`;
+  }
+  if (!ent.hasDim) {
+    return `<div class="head">
+        <span class="title">${title}</span>
+        ${dot(ent)}
+        ${switchEl(ent)}
+      </div>
+      <div class="srow"><span class="sstat"></span></div>`;
+  }
+  return `<div class="head">
+      <span class="title">${title}</span>
+      <span class="pos">—</span>
+      ${dot(ent)}
+      ${switchEl(ent)}
+    </div>
+    <div class="track" data-key="${key}">
+      <div class="fill"></div>
+      <div class="knob"></div>
+    </div>
+    <div class="srow"><span class="sstat"></span></div>`;
+}
+
+function paintLight(el, ent) {
+  const st = sliderState(ent.key);
+  st.kind = 'light';
+  st.spec = { min: ent.min, max: ent.max, step: ent.step };
+  settleValue(st, typeof ent.level === 'number' ? ent.level : null);
+
+  const on = settleSwitch(st, ent);
+  paintDot(el, ent);
+  paintSwitch(el, st, ent, on);
+  paintChannels(el, st, ent);
+
+  const posEl = el.querySelector('.pos');
+  const fill = el.querySelector('.fill');
+  const knob = el.querySelector('.knob');
+  if (ent.hasDim && posEl && fill && knob) {
+    const shown = snap(st.shown, st.spec);
+    posEl.innerHTML = `${Math.round(shown)}<span class="unit">%</span>`;
+    posEl.classList.toggle('stale', st.pending !== null || st.drag);
+    // Off keeps showing the level the lamp will come back on at, but stops
+    // claiming the room is lit.
+    posEl.classList.toggle('dim-off', on === false);
+    fill.style.width = shown + '%';
+    fill.style.filter = on === false ? 'grayscale(.9)' : '';
+    fill.style.opacity = on === false ? '.45' : '';
+    knob.style.left = shown + '%';
+  }
+
+  paintStat(el, st, ent, ent.mixed ? 'ulik' : '');
+}
+
+// ---- Thermostat (a switch and a target temperature on a dial) ------------
+function renderThermo(ent) {
+  const title = escapeHtml(ent.label);
+  const key = escapeHtml(ent.key);
+  if (ent.missing) {
+    return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
+      <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
+  }
+  const p0 = arcPoint(0);
+  return `<div class="head">
+      <span class="title">${title}</span>
+      ${dot(ent)}
+      ${switchEl(ent)}
+    </div>
+    <svg class="dial" data-key="${key}" viewBox="0 0 200 142">
+      <rect width="200" height="142" fill="transparent"></rect>
+      <path class="bg" d="${ARC_D}" stroke-width="14"></path>
+      <path class="val" d="${ARC_D}" stroke-width="14"
+            stroke-dasharray="${ARC_LEN.toFixed(2)}" stroke-dashoffset="${ARC_LEN.toFixed(2)}"></path>
+      <circle class="knob" r="8" fill="#fff" cx="${p0.x.toFixed(2)}" cy="${p0.y.toFixed(2)}"></circle>
+      <text class="num" x="${ARC.cx}" y="92" font-size="46">—</text>
+      <text class="deg" x="${ARC.cx}" y="114" font-size="14">${escapeHtml(ent.units || '°C')}</text>
+    </svg>
+    <div class="srow"><span class="sstat"></span></div>`;
+}
+
+function paintThermo(el, ent) {
+  const st = sliderState(ent.key);
+  st.kind = 'thermo';
+  st.spec = { min: ent.min, max: ent.max, step: ent.step };
+  settleValue(st, typeof ent.target === 'number' ? ent.target : null);
+
+  const on = settleSwitch(st, ent);
+  paintDot(el, ent);
+  paintSwitch(el, st, ent, on);
+
+  const dial = el.querySelector('.dial');
+  const valEl = el.querySelector('.dial .val');
+  const knob = el.querySelector('.dial .knob');
+  const num = el.querySelector('.dial .num');
+  if (dial && valEl && knob && num) {
+    const shown = snap(st.shown, st.spec);
+    const range = st.spec.max - st.spec.min;
+    const frac = range > 0 ? Math.min(1, Math.max(0, (shown - st.spec.min) / range)) : 0;
+    // Off greys the dial but leaves it working: set a target, then switch on.
+    const colour = on === false ? '#6f7b95' : tempColor(shown);
+    valEl.setAttribute('stroke-dashoffset', (ARC_LEN * (1 - frac)).toFixed(2));
+    valEl.setAttribute('stroke', colour);
+    const p = arcPoint(frac);
+    knob.setAttribute('cx', p.x.toFixed(2));
+    knob.setAttribute('cy', p.y.toFixed(2));
+    num.textContent = Number.isInteger(shown) ? String(shown) : shown.toFixed(1);
+    num.setAttribute('fill', colour);
+    dial.classList.toggle('off', on === false);
+    dial.classList.toggle('pend', st.pending !== null || st.drag);
+  }
+
+  paintStat(el, st, ent, ent.targetSetable === false ? 'kan ikke stilles' : '');
+}
+
+// ---- Switch and status row, shared by lights and thermostats -------------
+// The switch answers the finger straight away; that optimistic value stands
+// until the poll agrees with it, then gives up rather than lying forever.
+function settleSwitch(st, ent) {
+  if (st.onoff !== null && !st.onoffBusy &&
+      (ent.onoff === st.onoff || Date.now() - st.onoffAt > FAST_PENDING_MS)) {
+    st.onoff = null;
+  }
+  return st.onoff === null ? ent.onoff : st.onoff;
+}
+
+function paintSwitch(el, st, ent, on) {
+  const head = el.querySelector('.head');
+  if (head) paintOneSwitch(head, on, st.onoffBusy, ent.onoffSetable);
+}
+
+// One row per named channel, each with its own optimistic state.
+function paintChannels(el, st, ent) {
+  (ent.channels || []).forEach((c, i) => {
+    const row = el.querySelector(`.crow[data-ch="${i}"]`);
+    if (!row) return;
+    const cs = chanState(st, i);
+    if (cs.onoff !== null && !cs.busy &&
+        (c.onoff === cs.onoff || Date.now() - cs.at > FAST_PENDING_MS)) {
+      cs.onoff = null;
+    }
+    paintOneSwitch(row, cs.onoff === null ? c.onoff : cs.onoff, cs.busy, c.setable);
+  });
+}
+
+// The only place a failed write is ever shown. `extra` is the card's own note
+// for when there is nothing more urgent to say.
+function paintStat(el, st, ent, extra) {
+  const stat = el.querySelector('.sstat');
+  if (!stat) return;
+  let msg = st.msg;
+  if (!st.busy && !st.onoffBusy && !st.err) {
+    if (st.pending !== null) msg = 'sender…';
+    else if (ent.available === false) msg = 'utilgjengelig';
+    else if (ent.partial) msg = 'delvis utilgjengelig';
+    else msg = extra || '';
+  }
+  stat.textContent = msg || '';
+  stat.classList.toggle('err', !!st.err);
+}
+
+async function toggleSwitch(key, chIdx) {
+  const st = sliderState(key);
+  const ent = lastCtrl[key];
+  if (!ent || ent.missing) return;
+  // A channel row and the card's own switch behave identically; they just keep
+  // their state in different places.
+  const ch = chIdx === null ? null : (ent.channels || [])[chIdx];
+  if (chIdx !== null && !ch) return;
+  const cs = ch ? chanState(st, chIdx) : null;
+  if ((ch ? ch.setable : ent.onoffSetable) === false) return;
+  const cur = ch ? (cs.onoff === null ? ch.onoff : cs.onoff)
+                 : (st.onoff === null ? ent.onoff : st.onoff);
+  const next = !cur;
+  const seq = ch ? ++cs.seq : ++st.swSeq;
+  if (ch) { cs.onoff = next; cs.at = Date.now(); cs.busy = true; }
+  else { st.onoff = next; st.onoffAt = Date.now(); st.onoffBusy = true; }
+  st.err = false;
+  st.msg = '';
+  paintAllControls();
+
+  const body = { key, page: PAGE, onoff: next };
+  if (ch) body.channel = chIdx;
+
+  try {
+    const res = await fetch('api/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (seq !== (ch ? cs.seq : st.swSeq)) return;   // superseded by a newer tap
+    if (ch) cs.busy = false; else st.onoffBusy = false;
+    const revert = () => { if (ch) cs.onoff = null; else st.onoff = null; };
+    if (!res.ok || data.ok === false) {
+      revert();                               // fall back to the live reading
+      st.err = true;
+      st.msg = data.error ? String(data.error).slice(0, 90) : `Feil (HTTP ${res.status})`;
+    } else {
+      const failed = (data.results || []).filter(r => !r.ok);
+      st.err = failed.length > 0;
+      st.msg = failed.length ? String(failed[0].error).slice(0, 90) : '';
+      if (failed.length) revert();
+    }
+  } catch (err) {
+    if (seq !== (ch ? cs.seq : st.swSeq)) return;
+    if (ch) { cs.busy = false; cs.onoff = null; } else { st.onoffBusy = false; st.onoff = null; }
+    st.err = true;
+    st.msg = 'Ingen forbindelse';
+  }
+  paintAllControls();
+  tick();
+}
+
+document.addEventListener('click', (ev) => {
+  const sw = ev.target.closest && ev.target.closest('.sw[data-key]');
+  if (!sw || sw.disabled) return;
+  const ch = sw.dataset.ch;
+  toggleSwitch(sw.dataset.key, ch === undefined ? null : Number(ch));
+});
+
 // DOM id for a card. The server's `key` is derived from the entry's position in
 // config.json, so it survives cards appearing and disappearing.
 function cardId(ent) {
@@ -581,10 +1014,15 @@ function cardId(ent) {
 }
 function cardEl(ent) { return document.getElementById(cardId(ent)); }
 
-function paintAllSliders() {
-  for (const ent of Object.values(lastSliderEnt)) {
+// Every writable card repaints together: one gesture can only touch one card,
+// but the drag handlers don't need to know which kind it was.
+function paintAllControls() {
+  for (const ent of Object.values(lastCtrl)) {
     const el = cardEl(ent);
-    if (el) paintSlider(el, ent);
+    if (!el) continue;
+    if (ent.size === 'slider') paintSlider(el, ent);
+    else if (ent.size === 'thermostat') paintThermo(el, ent);
+    else if (ent.size === 'light') paintLight(el, ent);
   }
 }
 
@@ -612,7 +1050,9 @@ function dotTitle(ent) {
 
 function cardAccent(ent) {
   if (ent.missing) return '#ff6b6b';
-  if (ent.size === 'slider') return accentFor(ent.capability);
+  if (ent.size === 'slider' || ent.size === 'thermostat') return accentFor(ent.capability);
+  // A dimmable lamp and a plain switch should look like the same kind of thing.
+  if (ent.size === 'light') return accentFor('onoff');
   const caps = ent.capabilities || [];
   const alarm = caps.find(c => c.id.startsWith('alarm_'));
   return accentFor((alarm || caps[0] || {}).id);
@@ -625,6 +1065,10 @@ function cardClass(ent) {
   let base;
   if (ent.missing && size !== 'slider') base = 'card small missing';
   else if (size === 'slider') base = 'card slider' + unavail + (ent.missing ? ' missing' : '');
+  else if (size === 'thermostat') base = 'card thermostat' + unavail + (ent.missing ? ' missing' : '');
+  else if (size === 'light') base = 'card light'
+    + (ent.hasDim || (ent.channels || []).length ? '' : ' plain')
+    + unavail + (ent.missing ? ' missing' : '');
   else if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) base = 'card single-card ' + size + unavail;
   else if (size === 'weather') base = 'card weather' + unavail;
   else if (size === 'list') base = 'card list' + unavail;
@@ -642,6 +1086,8 @@ function renderInner(ent) {
   const title = escapeHtml(ent.label);
 
   if (size === 'slider') return renderSlider(ent);
+  if (size === 'thermostat') return renderThermo(ent);
+  if (size === 'light') return renderLight(ent);
   if (ent.missing) {
     return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
       <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
@@ -683,12 +1129,13 @@ async function tick() {
   if (dragKey) return;
   const seq = ++tickSeq;
   try {
-    const url = 'api/state' + (showHidden ? '?showHidden=1' : '');
+    const url = 'api/state?page=' + encodeURIComponent(PAGE) + (showHidden ? '&showHidden=1' : '');
     const res = await fetch(url, { cache: 'no-store' });
     const data = await res.json();
     if (seq !== tickSeq || dragKey) return;   // superseded, or a drag started
     if (data.error) { statusEl.innerHTML = `<span class="error">Homey error: ${escapeHtml(data.error)}</span>`; return; }
     if (!data.configured) {
+      setPageLinks(data.pages, data.page);
       setConfigWarning(null);   // the full-page notice below covers it
       main.innerHTML = data.configError
         ? `<div class="notice"><strong class="error">config.json could not be read.</strong><br>
@@ -704,20 +1151,24 @@ async function tick() {
       return;
     }
     document.title = data.title || 'Home';
+    setPageLinks(data.pages, data.page);
 
     const singles = data.entities.filter(e => e.size !== 'list' && e.size !== 'slider');
     const sliderEnts = data.entities.filter(e => e.size === 'slider');
     const lists = data.entities.filter(e => e.size === 'list');
     const ordered = [...singles, ...sliderEnts, ...lists];
 
-    lastSliderEnt = {};
-    for (const e of sliderEnts) lastSliderEnt[e.key] = e;
+    lastCtrl = {};
+    for (const e of data.entities) {
+      if (e.size === 'slider' || e.size === 'thermostat' || e.size === 'light') lastCtrl[e.key] = e;
+    }
 
     // Deliberately value-free: the signature must not change as positions move,
     // or a rebuild would rip the card out from under a finger mid-drag.
     const sig = ordered.map(e =>
       e.key + '|' + e.size + '|' + (e.missing ? 'm' : '') + '|' + (e.hidden ? 'h' : '') +
-      '|' + (e.size === 'slider' ? `${e.min}-${e.max}-${e.step}` : '') + '|' +
+      '|' + (e.size === 'slider' || e.size === 'thermostat' || e.size === 'light'
+              ? `${e.min}-${e.max}-${e.step}${e.size === 'light' ? (e.hasDim ? '-dim' : '-plain') : ''}${e.onoffSetable === false ? '-ro' : ''}${(e.channels || []).map(c => c.name + (c.setable ? 's' : 'r')).join('~')}` : '') + '|' +
       (e.capabilities || []).map(c => c.id).join(',')).join('||');
 
     if (sig !== lastSig) {
@@ -734,7 +1185,7 @@ async function tick() {
       if (lists.length) html += `<div class="grid lists">${lists.map(shell).join('')}</div>`;
       main.innerHTML = html;
       lastSig = sig;
-      paintAllSliders();
+      paintAllControls();
     } else {
       // Same cards: update contents in place, only when actually changed (no blink).
       for (const e of ordered) {
@@ -743,9 +1194,11 @@ async function tick() {
         const cls = cardClass(e);
         if (el.className !== cls) el.className = cls;
         el.style.setProperty('--accent', cardAccent(e));
-        // Sliders are never re-rendered: paintSlider nudges the few nodes that
-        // change, so a drag in progress survives the poll.
+        // Writable cards are never re-rendered: their paint functions nudge the
+        // few nodes that change, so a drag in progress survives the poll.
         if (e.size === 'slider') { paintSlider(el, e); continue; }
+        if (e.size === 'thermostat') { paintThermo(el, e); continue; }
+        if (e.size === 'light') { paintLight(el, e); continue; }
         const inner = renderInner(e);
         if (lastInner[e.key] !== inner) { el.innerHTML = inner; lastInner[e.key] = inner; }
       }

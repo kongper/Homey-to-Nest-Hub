@@ -13,7 +13,7 @@ const CACHE_TTL = Number(process.env.CACHE_TTL || 5) * 1000;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 
 // Card levels. "slider" is the only writable one.
-const SIZES = ['big', 'small', 'list', 'weather', 'slider'];
+const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light'];
 
 // Slider defaults. Positions are always expressed as "% down": 0 = fully open,
 // 100 = fully closed, matching how these screens report windowcoverings_set
@@ -169,6 +169,11 @@ function summariseDevice(device, zones) {
       type: c.type ?? null,
       getable: c.getable ?? null,
       setable: c.setable ?? null,
+      // Numeric capabilities carry their own limits; a thermostat dial is drawn
+      // from these unless config.json narrows them.
+      min: c.min ?? null,
+      max: c.max ?? null,
+      step: c.step ?? null,
       lastUpdated: c.lastUpdated ?? null,
     };
   }
@@ -238,8 +243,8 @@ function loadConfig() {
 //   1. Array (legacy):       [ { deviceId, size, ... }, ... ]
 //   2. Grouped by size:      { <size>: [ { deviceId, ... }, ... ], ... }
 // In the grouped form, the size comes from the key.
-function normalizeEntities(config) {
-  const raw = config && config.entities;
+function normalizeEntities(page) {
+  const raw = page && page.entities;
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === 'object') {
     const out = [];
@@ -251,6 +256,54 @@ function normalizeEntities(config) {
     return out;
   }
   return [];
+}
+
+// ---------------------------------------------------------------------------
+// Pages
+// ---------------------------------------------------------------------------
+// The root page is the top-level `entities`, as it always was. Extra pages live
+// under `pages`, each with its own `entities` (plus optional `title`/`label`),
+// and are served from this same HTML at /<name> -- one screen per room, one
+// config file, one set of card levels.
+//
+// Everything downstream takes a *page* rather than the config, so a card key
+// like "slider:0" is only ever resolved against the page it belongs to: the
+// write whitelist stays exactly as narrow as it was.
+const ROOT_PAGE = '';
+
+function pageEntries(config) {
+  const pages = config && config.pages;
+  return pages && typeof pages === 'object' && !Array.isArray(pages) ? pages : {};
+}
+
+function pageConfig(config, name) {
+  if (!config) return null;
+  if (!name || name === ROOT_PAGE) {
+    return {
+      name: ROOT_PAGE,
+      path: '/',
+      title: config.title || 'Home Dashboard',
+      label: config.label || 'Hjem',
+      entities: config.entities,
+    };
+  }
+  const p = pageEntries(config)[name];
+  if (!p || typeof p !== 'object') return null;
+  return {
+    name,
+    path: '/' + name,
+    title: p.title || name,
+    label: p.label || p.title || name,
+    entities: p.entities,
+  };
+}
+
+// What the header renders its links from.
+function pageList(config) {
+  return [pageConfig(config, ROOT_PAGE)]
+    .concat(Object.keys(pageEntries(config)).map((n) => pageConfig(config, n)))
+    .filter(Boolean)
+    .map((p) => ({ name: p.name, path: p.path, label: p.label }));
 }
 
 // summariseDevice walks a device's whole capability list, and several config
@@ -345,8 +398,8 @@ function fromDevicePct(devicePct, member) {
 // Every slider in the current config, keyed as "slider:<index>". Both /api/state
 // and /api/set derive from this, so a device can only be written if it is listed
 // under a slider card here.
-function sliderCards(config) {
-  return normalizeEntities(config)
+function sliderCards(page) {
+  return normalizeEntities(page)
     .filter((e) => e.size === 'slider')
     .map((entry, i) => ({ key: `slider:${i}`, entry, spec: sliderSpec(entry) }));
 }
@@ -419,6 +472,234 @@ function buildSliderEntity(card, summarise) {
 }
 
 // ---------------------------------------------------------------------------
+// Thermostats (writable: an on/off switch and a target temperature)
+// ---------------------------------------------------------------------------
+// Like sliders these are never hidden by showIf -- a control that disappears is
+// not a control -- and the write path is whitelisted by the card rather than by
+// the request: only the two capabilities named here, on that one device.
+const THERMO_DEFAULTS = {
+  capability: 'target_temperature',
+  switchCapability: 'onoff',
+  min: 5,
+  max: 30,
+  step: 0.5,
+};
+
+function thermoSpec(entry) {
+  const str = (v, fallback) => (typeof v === 'string' && v.trim() ? v : fallback);
+  return {
+    deviceId: typeof entry.deviceId === 'string' ? entry.deviceId : '',
+    capability: str(entry.capability, THERMO_DEFAULTS.capability),
+    switchCapability: str(entry.switchCapability, THERMO_DEFAULTS.switchCapability),
+    // null means "whatever the device says it accepts".
+    min: numOr(entry.min, null),
+    max: numOr(entry.max, null),
+    step: numOr(entry.step, null),
+  };
+}
+
+// The dial's range: the config's if it states one, else the capability's own,
+// else a sane room-heating range. A heater that accepts 45 degrees is not a
+// useful dial on a wall, so narrowing it in config.json is expected.
+function thermoRange(spec, cap) {
+  const lo = numOr(spec.min, numOr(cap && cap.min, THERMO_DEFAULTS.min));
+  let hi = numOr(spec.max, numOr(cap && cap.max, THERMO_DEFAULTS.max));
+  if (hi <= lo) hi = lo + 1;
+  const step = Math.min(
+    10,
+    Math.max(0.1, numOr(spec.step, numOr(cap && cap.step, THERMO_DEFAULTS.step))),
+  );
+  return { min: lo, max: hi, step };
+}
+
+// Every thermostat in the current config, keyed "thermo:<index>". Both
+// /api/state and /api/set derive from this, in the same order.
+function thermoCards(page) {
+  return normalizeEntities(page)
+    .filter((e) => e.size === 'thermostat')
+    .map((entry, i) => ({ key: `thermo:${i}`, entry, spec: thermoSpec(entry) }));
+}
+
+function buildThermoEntity(card, summarise) {
+  const { key, entry, spec } = card;
+  const summary = summarise(spec.deviceId);
+  const base = {
+    key,
+    size: 'thermostat',
+    deviceId: spec.deviceId,
+    hidden: false,
+    capability: spec.capability,
+    switchCapability: spec.switchCapability,
+  };
+  if (!summary) {
+    return {
+      ...base,
+      label: entry.label || spec.deviceId,
+      missing: true,
+      available: false,
+      partial: false,
+      onoff: null,
+      onoffSetable: false,
+      target: null,
+      targetSetable: false,
+      units: '\u00b0C',
+      ...thermoRange(spec, null),
+    };
+  }
+  const tCap = summary.capabilities[spec.capability];
+  const sCap = summary.capabilities[spec.switchCapability];
+  // Same rule as the slider dot: `available: false` greys out the whole card,
+  // so it stays reserved for "nothing here works"; one missing half is amber.
+  const usable = (tCap ? 1 : 0) + (sCap ? 1 : 0);
+  return {
+    ...base,
+    label: entry.label || summary.name,
+    name: summary.name,
+    zoneName: summary.zoneName,
+    missing: false,
+    available: summary.available !== false && usable > 0,
+    partial: summary.available !== false && usable === 1,
+    onoff: typeof sCap?.value === 'boolean' ? sCap.value : null,
+    onoffSetable: !!sCap && sCap.setable !== false,
+    target: typeof tCap?.value === 'number' ? tCap.value : null,
+    targetSetable: !!tCap && tCap.setable !== false,
+    units: (tCap && tCap.units) || '\u00b0C',
+    ...thermoRange(spec, tCap),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lights (writable: one or more switches, plus an optional dimmer)
+// ---------------------------------------------------------------------------
+// `switchCapability` may be a list: a two-gang socket wired to one lamp is one
+// switch on screen. A device with no dim capability simply renders as a plain
+// switch -- that is not an error worth a warning light.
+const LIGHT_DEFAULTS = {
+  switchCapability: 'onoff',
+  capability: 'dim',
+  step: 5,
+};
+
+function lightSpec(entry) {
+  // Two keys, two behaviours, no boolean flag between them:
+  //   switchCapability: ["switch_1","switch_2"]  -> one switch driving both
+  //   switches: [{capability,name}, ...]         -> a named row per channel
+  // A two-channel device is one lamp or two, and only the config knows which.
+  const channels = (Array.isArray(entry.switches) ? entry.switches : [])
+    .map((c) => (typeof c === 'string' ? { capability: c } : c))
+    .filter((c) => c && typeof c.capability === 'string' && c.capability.trim())
+    .map((c, i) => ({
+      capability: c.capability.trim(),
+      name: (typeof c.name === 'string' && c.name.trim()) || `Kanal ${i + 1}`,
+    }));
+  const raw = entry.switchCapability ?? LIGHT_DEFAULTS.switchCapability;
+  const switches = (Array.isArray(raw) ? raw : [raw])
+    .filter((c) => typeof c === 'string' && c.trim())
+    .map((c) => c.trim());
+  return {
+    deviceId: typeof entry.deviceId === 'string' ? entry.deviceId : '',
+    channels,
+    switchCapabilities: channels.length
+      ? channels.map((c) => c.capability)
+      : switches.length ? switches : [LIGHT_DEFAULTS.switchCapability],
+    // Some apps report a capability as setable that they never registered a
+    // listener for, so writing it always fails. "readonly": true says so up
+    // front and the card shows the state instead of a control that can't work.
+    readonly: entry.readonly === true,
+    // "dim": false makes a dimmable lamp behave as a plain switch.
+    capability:
+      entry.dim === false
+        ? null
+        : typeof entry.capability === 'string' && entry.capability.trim()
+          ? entry.capability.trim()
+          : LIGHT_DEFAULTS.capability,
+    step: Math.min(50, Math.max(1, numOr(entry.step, LIGHT_DEFAULTS.step))),
+  };
+}
+
+function lightCards(page) {
+  return normalizeEntities(page)
+    .filter((e) => e.size === 'light')
+    .map((entry, i) => ({ key: `light:${i}`, entry, spec: lightSpec(entry) }));
+}
+
+function buildLightEntity(card, summarise) {
+  const { key, entry, spec } = card;
+  const summary = summarise(spec.deviceId);
+  const base = {
+    key,
+    size: 'light',
+    deviceId: spec.deviceId,
+    hidden: false,
+    capability: spec.capability,
+    switchCapabilities: spec.switchCapabilities,
+    // The dim track is always a plain 0-100 %.
+    min: 0,
+    max: 100,
+    step: spec.step,
+  };
+  if (!summary) {
+    return {
+      ...base,
+      label: entry.label || spec.deviceId,
+      missing: true,
+      available: false,
+      partial: false,
+      mixed: false,
+      channels: [],
+      onoff: null,
+      onoffSetable: false,
+      hasDim: false,
+      level: null,
+      levelSetable: false,
+    };
+  }
+  const sCaps = spec.switchCapabilities.map((id) => summary.capabilities[id]).filter(Boolean);
+  const vals = sCaps.map((c) => c.value).filter((v) => typeof v === 'boolean');
+  const dCap = spec.capability ? summary.capabilities[spec.capability] : null;
+  return {
+    ...base,
+    label: entry.label || summary.name,
+    name: summary.name,
+    zoneName: summary.zoneName,
+    missing: false,
+    // The switch is what makes this card a card; a missing dimmer just means
+    // there is no track to draw.
+    available: summary.available !== false && sCaps.length > 0,
+    partial:
+      summary.available !== false &&
+      sCaps.length > 0 &&
+      sCaps.length < spec.switchCapabilities.length,
+    // One row per channel when the config named them. Each carries its own
+    // state, so a two-gang device can be two switches in one card.
+    channels: spec.channels.map((c) => {
+      const cap = summary.capabilities[c.capability];
+      return {
+        capability: c.capability,
+        name: c.name,
+        missing: !cap,
+        onoff: typeof cap?.value === 'boolean' ? cap.value : null,
+        setable: !spec.readonly && !!cap && cap.setable !== false,
+      };
+    }),
+    // On means every gang is on; when they disagree the card says so and a tap
+    // turns them all on.
+    onoff: vals.length ? vals.every(Boolean) : null,
+    mixed: vals.length > 1 && vals.some(Boolean) && !vals.every(Boolean),
+    onoffSetable:
+      !spec.readonly &&
+      sCaps.length === spec.switchCapabilities.length &&
+      sCaps.every((c) => c.setable !== false),
+    hasDim: !!dCap,
+    // Homey's dim is 0..1; the card is a percentage.
+    level: dCap && typeof dCap.value === 'number'
+      ? Math.round(clampPct(dCap.value * 100) * 10) / 10
+      : null,
+    levelSetable: !!dCap && dCap.setable !== false,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 const app = express();
@@ -446,10 +727,18 @@ app.get('/api/discover', async (req, res) => {
 // The configured dashboard state: only the selected devices/capabilities.
 app.get('/api/state', async (req, res) => {
   const { config, error: configError, stale } = loadConfig();
-  const entries = normalizeEntities(config);
+  // No ?page= is the root dashboard, exactly as before.
+  const wanted = typeof req.query.page === 'string' ? req.query.page : ROOT_PAGE;
+  const page = pageConfig(config, wanted);
+  const pages = pageList(config);
+  if (!page) {
+    return res.json({ configured: false, configError, pages, page: wanted, entities: [],
+                      configWarning: `No page "${wanted}" in config.` });
+  }
+  const entries = normalizeEntities(page);
   if (!entries.length) {
     // configError distinguishes "config.json is broken" from "no config yet".
-    return res.json({ configured: false, configError, entities: [] });
+    return res.json({ configured: false, configError, pages, page: page.name, entities: [] });
   }
 
   // When ?showHidden=1, entities that would be hidden by showIf are returned
@@ -464,8 +753,12 @@ app.get('/api/state', async (req, res) => {
     // hidden by showIf (a control that disappears is not a control). Both this
     // list and /api/set walk normalizeEntities in the same order, so the nth
     // slider entry here is the nth card there — that's what "slider:<n>" means.
-    const cards = sliderCards(config);
+    const cards = sliderCards(page);
     let sliderIdx = 0;
+    const thermos = thermoCards(page);
+    let thermoIdx = 0;
+    const lights = lightCards(page);
+    let lightIdx = 0;
 
     const entities = entries
       .map((entry, i) => {
@@ -473,6 +766,16 @@ app.get('/api/state', async (req, res) => {
           const card = cards[sliderIdx++];
           if (!card || !card.spec.members.length) return null;
           return buildSliderEntity(card, summarise);
+        }
+        if (entry.size === 'thermostat') {
+          const card = thermos[thermoIdx++];
+          if (!card || !card.spec.deviceId) return null;
+          return buildThermoEntity(card, summarise);
+        }
+        if (entry.size === 'light') {
+          const card = lights[lightIdx++];
+          if (!card || !card.spec.deviceId) return null;
+          return buildLightEntity(card, summarise);
         }
         // `key` identifies the card across polls. It comes from the entry's
         // position in config.json, not from its position in the response, so it
@@ -520,7 +823,9 @@ app.get('/api/state', async (req, res) => {
 
     res.json({
       configured: true,
-      title: config.title || 'Home Dashboard',
+      title: page.title,
+      page: page.name,
+      pages,
       updatedAt: new Date().toISOString(),
       // Set when these cards come from a cached config because the file itself
       // can no longer be read — the dashboard works, but may be out of date.
@@ -536,7 +841,78 @@ app.get('/api/state', async (req, res) => {
 // slider card in config.json, and only on that card's capability — the request
 // carries a card key, never a device id or capability name.
 app.post('/api/set', async (req, res) => {
-  const { key, position } = req.body || {};
+  const key = (req.body || {}).key;
+  if (typeof key === 'string' && /^thermo:\d+$/.test(key)) return setThermostat(req, res, key);
+  if (typeof key === 'string' && /^light:\d+$/.test(key)) return setLight(req, res, key);
+  return setSliderPosition(req, res, key);
+});
+
+// Which page's card list a write is resolved against. A card key means nothing
+// on its own -- "slider:0" is a different device on every page -- so the page
+// comes with the request and the whitelist is that page's config, nothing wider.
+function writeTarget(req, res) {
+  const { config, error: configError } = loadConfig();
+  // A stale or unreadable file still yields the last good config, and moving a
+  // screen matters more than the file being current -- so only refuse when
+  // there is no config at all.
+  if (!config) {
+    res.status(500).json({ error: configError || 'No config.' });
+    return null;
+  }
+  const name = typeof (req.body || {}).page === 'string' ? req.body.page : ROOT_PAGE;
+  const page = pageConfig(config, name);
+  if (!page) {
+    res.status(404).json({ error: `No page "${name}" in config.` });
+    return null;
+  }
+  return page;
+}
+
+// Send a set of already-resolved capability writes to one device. Shared by the
+// light and thermostat cards, which are both "a switch plus a value". Responds
+// itself and returns null when nothing could be written.
+async function applyWrites(res, key, deviceId, name, writes) {
+  const [{ devices }, homey] = await Promise.all([getHomeyData(), connect()]);
+  const device = devices[deviceId];
+  if (!device) {
+    res.status(404).json({ key, ok: false, error: 'Device not found on Homey.' });
+    return null;
+  }
+  const capsObj = device.capabilitiesObj || {};
+  const results = await Promise.all(
+    writes.map(async (w) => {
+      const cap = capsObj[w.capabilityId];
+      if (!cap) return { ...w, name, ok: false, error: `No ${w.capabilityId} capability.` };
+      if (cap.setable === false) {
+        return { ...w, name, ok: false, error: `${w.capabilityId} is not setable.` };
+      }
+      try {
+        await homey.devices.setCapabilityValue({
+          deviceId,
+          capabilityId: w.capabilityId,
+          value: w.value,
+        });
+        return { ...w, name, ok: true };
+      } catch (err) {
+        return { ...w, name, ok: false, error: String(err?.message || err) };
+      }
+    }),
+  );
+
+  // A write makes the cached read stale immediately.
+  cache = { ts: 0, data: null };
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length === results.length) {
+    res.status(502).json({ key, ok: false, error: failed[0]?.error || 'All writes failed.', results });
+    return null;
+  }
+  return { results, failed };
+}
+
+// A slider write: a card key and a 0-100 % position, applied to every member.
+async function setSliderPosition(req, res, key) {
+  const { position } = req.body || {};
 
   if (typeof key !== 'string' || !/^slider:\d+$/.test(key)) {
     return res.status(400).json({ error: 'Bad or missing card key.' });
@@ -545,14 +921,9 @@ app.post('/api/set', async (req, res) => {
     return res.status(400).json({ error: 'position must be a number (0-100 % down).' });
   }
 
-  // A stale/unreadable file still yields the last good config, and moving a
-  // screen matters more than the file being current — so only refuse when there
-  // is no config at all.
-  const { config, error: configError } = loadConfig();
-  if (!config) {
-    return res.status(500).json({ error: configError || 'No config.' });
-  }
-  const card = sliderCards(config).find((c) => c.key === key);
+  const page = writeTarget(req, res);
+  if (!page) return;
+  const card = sliderCards(page).find((c) => c.key === key);
   if (!card || !card.spec.members.length) {
     return res.status(404).json({ error: `No slider card ${key} in config.` });
   }
@@ -612,9 +983,133 @@ app.post('/api/set', async (req, res) => {
   } catch (err) {
     res.status(502).json({ key, ok: false, error: String(err?.message || err) });
   }
+}
+
+// A thermostat write: `onoff` (boolean), `temperature` (number) or both. Only
+// the capabilities the card names are written, and only on that card's device.
+async function setThermostat(req, res, key) {
+  const { onoff, temperature } = req.body || {};
+  const hasOnoff = typeof onoff === 'boolean';
+  const hasTemp = typeof temperature === 'number' && Number.isFinite(temperature);
+  if (!hasOnoff && !hasTemp) {
+    return res.status(400).json({ error: 'Send onoff (boolean) and/or temperature (number).' });
+  }
+
+  const page = writeTarget(req, res);
+  if (!page) return;
+  const card = thermoCards(page).find((c) => c.key === key);
+  if (!card || !card.spec.deviceId) {
+    return res.status(404).json({ error: `No thermostat card ${key} in config.` });
+  }
+  const { spec } = card;
+
+  try {
+    const { devices } = await getHomeyData();
+    const device = devices[spec.deviceId];
+    // Report failures under the name from config.json when there is one.
+    const name = card.entry.label || device?.name || spec.deviceId;
+
+    const writes = [];
+    if (hasOnoff) writes.push({ capabilityId: spec.switchCapability, value: onoff });
+    if (hasTemp) {
+      // Clamp to the same range the dial draws, so a stale page cannot send a
+      // temperature the card never offered.
+      const range = thermoRange(spec, (device?.capabilitiesObj || {})[spec.capability]);
+      const v = Math.min(range.max, Math.max(range.min, temperature));
+      writes.push({ capabilityId: spec.capability, value: Math.round(v * 10) / 10 });
+    }
+
+    const out = await applyWrites(res, key, spec.deviceId, name, writes);
+    if (!out) return;
+    const tempWrite = out.results.find((r) => r.capabilityId === spec.capability && r.ok);
+    res.json({
+      key,
+      ok: true,
+      partial: out.failed.length > 0,
+      onoff: hasOnoff ? onoff : null,
+      temperature: tempWrite ? tempWrite.value : null,
+      results: out.results,
+    });
+  } catch (err) {
+    res.status(502).json({ key, ok: false, error: String(err?.message || err) });
+  }
+}
+
+// A light write: `onoff` (applied to every gang the card lists) and/or `level`
+// (0-100 %, written to the dim capability as Homey's 0..1).
+async function setLight(req, res, key) {
+  const { onoff, level } = req.body || {};
+  const hasOnoff = typeof onoff === 'boolean';
+  const hasLevel = typeof level === 'number' && Number.isFinite(level);
+  if (!hasOnoff && !hasLevel) {
+    return res.status(400).json({ error: 'Send onoff (boolean) and/or level (number, 0-100 %).' });
+  }
+
+  const page = writeTarget(req, res);
+  if (!page) return;
+  const card = lightCards(page).find((c) => c.key === key);
+  if (!card || !card.spec.deviceId) {
+    return res.status(404).json({ error: `No light card ${key} in config.` });
+  }
+  if (card.spec.readonly) {
+    return res.status(403).json({ key, ok: false, error: 'This card is read-only.' });
+  }
+  const { spec } = card;
+
+  try {
+    const { devices } = await getHomeyData();
+    const name = card.entry.label || devices[spec.deviceId]?.name || spec.deviceId;
+
+    // `channel` addresses one named row; without it the switch drives them all.
+    const chIdx = (req.body || {}).channel;
+    const writes = [];
+    if (hasOnoff) {
+      if (chIdx !== undefined && chIdx !== null) {
+        const ch = Number.isInteger(chIdx) ? spec.channels[chIdx] : null;
+        if (!ch) return res.status(404).json({ key, ok: false, error: `No channel ${chIdx} on ${key}.` });
+        writes.push({ capabilityId: ch.capability, value: onoff, channel: chIdx });
+      } else {
+        for (const capabilityId of spec.switchCapabilities) writes.push({ capabilityId, value: onoff });
+      }
+    }
+    if (hasLevel && spec.capability) {
+      // The card is a percentage; Homey's dim is 0..1.
+      const pct = Math.round(clampPct(level));
+      writes.push({ capabilityId: spec.capability, value: pct / 100, level: pct });
+    }
+
+    const out = await applyWrites(res, key, spec.deviceId, name, writes);
+    if (!out) return;
+    const dim = out.results.find((r) => r.capabilityId === spec.capability && r.ok);
+    res.json({
+      key,
+      ok: true,
+      partial: out.failed.length > 0,
+      onoff: hasOnoff ? onoff : null,
+      level: dim ? dim.level : null,
+      results: out.results,
+    });
+  } catch (err) {
+    res.status(502).json({ key, ok: false, error: String(err?.message || err) });
+  }
+}
+
+// Extra pages are served from the very same HTML as the dashboard: the page
+// name comes from the URL, its card list from config.json. Registered last, so
+// a real file and every /api route always win.
+app.get('/:page', (req, res, next) => {
+  const { config } = loadConfig();
+  if (!config || !Object.prototype.hasOwnProperty.call(pageEntries(config), req.params.page)) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Homey dashboard listening on http://0.0.0.0:${PORT}`);
   console.log(`Discovery page: http://localhost:${PORT}/discover.html`);
+  const { config } = loadConfig();
+  for (const p of pageList(config).filter((p) => p.name)) {
+    console.log(`Page "${p.label}": http://localhost:${PORT}${p.path}`);
+  }
 });
