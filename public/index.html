@@ -133,6 +133,16 @@
   .single .wx { width: 56px; height: 56px; }
   .card.big .single .wx { width: 92px; height: 92px; }
 
+  /* Room thermostat readout: the whole card is tinted by heating state */
+  .card.roomtemp { background: linear-gradient(160deg,
+      color-mix(in srgb, var(--accent) 26%, rgba(255,255,255,.04)), rgba(255,255,255,.025)); }
+  .card.roomtemp .head { justify-content: center; text-align: center; }
+  .rt { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center;
+    margin-top: .35rem; }
+  .rt .rtcur { font-size: 3rem; line-height: 1.05; color: var(--accent); }
+  .rt .rttgt { margin-top: .25rem; font-size: 1.05rem; color: var(--muted); }
+  .rt .rttgt .value { color: var(--text); font-weight: 650; }
+
   /* Weather: title on top, temp + symbol on one centered line */
   .wline { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
     gap: 1.1rem; margin-top: .3rem; min-height: 92px; }
@@ -287,7 +297,25 @@
 <script src="weather-symbols.js"></script>
 <script>
 const REFRESH_MS = 5000;
-const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light'];
+const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light', 'roomtemp'];
+
+// Room thermostat cards: below target = still heating (warm), at or above = reached.
+const ROOM_COLORS = { heating: '#ff9f43', reached: '#36d399', unknown: '#97a3c4' };
+function roomState(ent) {
+  const caps = ent.capabilities || [];
+  const cur = caps.find(c => c.id === 'measure_temperature');
+  const tgt = caps.find(c => c.id === 'target_temperature');
+  const a = cur && typeof cur.value === 'number' ? cur.value : null;
+  const b = tgt && typeof tgt.value === 'number' ? tgt.value : null;
+  const state = a === null || b === null ? 'unknown' : (a < b ? 'heating' : 'reached');
+  return { cur, tgt, state };
+}
+function fmtTemp(cap) {
+  if (!cap || typeof cap.value !== 'number') return '—';
+  const v = cap.value;
+  const num = Number.isInteger(v) ? v : v.toFixed(1);
+  return num + (cap.units ? `<span class="unit">${escapeHtml(cap.units)}</span>` : '');
+}
 // How long to keep showing the position we commanded while the screens travel
 // there, before trusting the live reading again.
 const PENDING_MS = 25000;
@@ -1061,6 +1089,7 @@ function dotTitle(ent) {
 
 function cardAccent(ent) {
   if (ent.missing) return '#ff6b6b';
+  if (ent.size === 'roomtemp') return ROOM_COLORS[roomState(ent).state];
   if (ent.size === 'slider' || ent.size === 'thermostat') return accentFor(ent.capability);
   // A dimmable lamp and a plain switch should look like the same kind of thing.
   if (ent.size === 'light') return accentFor('onoff');
@@ -1082,6 +1111,7 @@ function cardClass(ent) {
     + unavail + (ent.missing ? ' missing' : '');
   else if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) base = 'card single-card ' + size + unavail;
   else if (size === 'weather') base = 'card weather' + unavail;
+  else if (size === 'roomtemp') base = 'card roomtemp ' + roomState(ent).state + unavail;
   else if (size === 'list') base = 'card list' + unavail;
   else base = 'card ' + size + unavail;
   return base + ghost;
@@ -1108,6 +1138,12 @@ function renderInner(ent) {
   if (ent.missing) {
     return `<div class="head"><span class="title">${title}</span>${dot(ent)}</div>
       <div class="single"><span class="muted error">Not found (${escapeHtml(ent.deviceId)})</span></div>`;
+  }
+  if (size === 'roomtemp') {
+    const r = roomState(ent);
+    return `<div class="head"><span class="title">${title}${hiddenTag(ent)}${staleNote(ent)}</span>${dot(ent)}</div>
+      <div class="rt"><span class="value rtcur">${fmtTemp(r.cur)}</span>
+      <span class="rttgt">Ønsket <span class="value">${fmtTemp(r.tgt)}</span></span></div>`;
   }
   if ((size === 'big' || size === 'small') && (ent.capabilities || []).length === 1) {
     return `<div class="head"><span class="title">${title}${hiddenTag(ent)}${staleNote(ent)}</span>${dot(ent)}</div>

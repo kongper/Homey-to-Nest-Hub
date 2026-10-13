@@ -13,7 +13,10 @@ const CACHE_TTL = Number(process.env.CACHE_TTL || 5) * 1000;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 
 // Card levels. "slider" is the only writable one.
-const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light'];
+const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light', 'roomtemp'];
+// A room thermostat readout: current vs. wanted temperature. Read-only; the card
+// colours itself by whether the room is still below its target.
+const ROOMTEMP_CAPS = ['measure_temperature', 'target_temperature'];
 
 // Slider defaults. Positions are always expressed as "% down": 0 = fully open,
 // 100 = fully closed, matching how these screens report windowcoverings_set
@@ -818,7 +821,9 @@ app.get('/api/state', async (req, res) => {
         const wanted =
           Array.isArray(entry.capabilities) && entry.capabilities.length
             ? entry.capabilities
-            : Object.keys(summary.capabilities);
+            : entry.size === 'roomtemp'
+              ? ROOMTEMP_CAPS
+              : Object.keys(summary.capabilities);
         const capabilities = wanted
           .map((capId) => summary.capabilities[capId])
           .filter(Boolean);
