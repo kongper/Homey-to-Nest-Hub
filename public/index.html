@@ -135,13 +135,18 @@
 
   /* Room thermostat readout: the whole card is tinted by heating state */
   .card.roomtemp { background: linear-gradient(160deg,
-      color-mix(in srgb, var(--accent) 26%, rgba(255,255,255,.04)), rgba(255,255,255,.025)); }
+      color-mix(in srgb, var(--accent) 78%, #000), color-mix(in srgb, var(--accent) 52%, #000));
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 22px -4px var(--accent), 0 10px 30px rgba(0,0,0,.35); }
+  .card.roomtemp::after { display: none; }
   .card.roomtemp .head { justify-content: center; text-align: center; }
+  .card.roomtemp .title { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
   .rt { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center;
     margin-top: .35rem; }
-  .rt .rtcur { font-size: 3rem; line-height: 1.05; color: var(--accent); }
-  .rt .rttgt { margin-top: .25rem; font-size: 1.05rem; color: var(--muted); }
-  .rt .rttgt .value { color: var(--text); font-weight: 650; }
+  .rt .rtcur { font-size: 3rem; line-height: 1.05; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.3); }
+  .rt .unit { color: rgba(255,255,255,.8); }
+  .rt .rttgt { margin-top: .25rem; font-size: 1.05rem; color: rgba(255,255,255,.85); }
+  .rt .rttgt .value { color: #fff; font-weight: 650; }
 
   /* Weather: title on top, temp + symbol on one centered line */
   .wline { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
@@ -299,7 +304,8 @@
 const REFRESH_MS = 5000;
 const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light', 'roomtemp'];
 
-// Room thermostat cards: below target = still heating (warm), at or above = reached.
+// Room thermostat cards: coloured by the thermostat's own heating-active flag.
+// A device without that flag falls back to comparing current with target.
 const ROOM_COLORS = { heating: '#ff9f43', reached: '#36d399', unknown: '#97a3c4' };
 function roomState(ent) {
   const caps = ent.capabilities || [];
@@ -307,7 +313,10 @@ function roomState(ent) {
   const tgt = caps.find(c => c.id === 'target_temperature');
   const a = cur && typeof cur.value === 'number' ? cur.value : null;
   const b = tgt && typeof tgt.value === 'number' ? tgt.value : null;
-  const state = a === null || b === null ? 'unknown' : (a < b ? 'heating' : 'reached');
+  const flag = caps.find(c => c.id === 'salus_heating_active');
+  let state;
+  if (flag && typeof flag.value === 'boolean') state = flag.value ? 'heating' : 'reached';
+  else state = a === null || b === null ? 'unknown' : (a < b ? 'heating' : 'reached');
   return { cur, tgt, state };
 }
 function fmtTemp(cap) {

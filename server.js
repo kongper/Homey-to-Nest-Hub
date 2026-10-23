@@ -15,8 +15,8 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, 'config.json
 // Card levels. "slider" is the only writable one.
 const SIZES = ['big', 'small', 'list', 'weather', 'slider', 'thermostat', 'light', 'roomtemp'];
 // A room thermostat readout: current vs. wanted temperature. Read-only; the card
-// colours itself by whether the room is still below its target.
-const ROOMTEMP_CAPS = ['measure_temperature', 'target_temperature'];
+// colours itself by the thermostat's own "heating active" flag.
+const ROOMTEMP_CAPS = ['measure_temperature', 'target_temperature', 'salus_heating_active'];
 
 // Slider defaults. Positions are always expressed as "% down": 0 = fully open,
 // 100 = fully closed, matching how these screens report windowcoverings_set
